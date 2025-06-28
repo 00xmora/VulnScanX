@@ -40,18 +40,15 @@ Ensure you have the following installed on your system:
 * **pip** (Python package installer)
 * **Chrome Browser** (or Firefox) installed on the machine where VulnScanX server runs.
 * **ChromeDriver** (or GeckoDriver) executable. **Crucially, its version MUST match your installed browser version.** Place it in your system's PATH or directly in your `VulnScanX/` project root directory.
-* **External Command-Line Tools:** Many scanning modules rely on these. Install them and ensure they are in your system's PATH:
+* **External Command-Line Tools:** Many scanning modules rely on these. **The `install.sh` script will help install most of these.**
     * `amass`
     * `subfinder`
-    * `sublist3r`
     * `httpx`
     * `dnsrecon`
     * `ffuf`
-    * `dalfox` (requires Go installation: `go install github.com/hahwul/dalfox@latest`)
-    * `sqlmap` (if `sqlinjection.py` uses it; typically installed separately)
-    * `commix` (if `commandinjection.py` uses it; typically installed separately)
-
-    *(For Linux/WSL users, many can be installed via `apt` or `go install`.)*
+    * `dalfox`
+    * `sqlmap`
+    * `commix`
 
 ### Installation
 
@@ -66,7 +63,7 @@ Ensure you have the following installed on your system:
     ```bash
     docker build -t vulnscanx .
     ```
-    * This process installs all Python dependencies and necessary browser components (Chromium) within the image.
+    * This process installs all Python dependencies and necessary browser components (Chromium) within the image, **along with the external scanning tools (Go-based tools, sqlmap, commix, dnsrecon)**.
 3.  **Run the Docker container:**
     ```bash
     docker run -p 80:80 --name vulnscanx_app vulnscanx
@@ -80,13 +77,20 @@ Ensure you have the following installed on your system:
     git clone [https://github.com/your-username/VulnScanX.git](https://github.com/your-username/VulnScanX.git) # Replace with your actual repo URL
     cd VulnScanX
     ```
-2.  **Install Python dependencies:**
+2.  **Make the installation script executable:**
     ```bash
-    pip install -r requirements.txt
+    chmod +x install.sh
     ```
-3.  **Configure API Keys (Optional):**
+3.  **Run the installation script:**
+    ```bash
+    ./install.sh
+    ```
+    * This script will install Python dependencies from `requirements.txt` and attempt to install the Go programming language, Go-based tools (DalFox, Amass, Subfinder, httpx, ffuf), and Python-based tools (DNSRecon, sqlmap, commix).
+    * **Important:** The script might require `sudo` for some installations (e.g., Go, apt packages). It will also attempt to modify your `~/.profile` and `~/.bashrc` for PATH variables. You might need to restart your terminal after running it.
+4.  **Configure API Keys (Optional):**
     * Open `tools/config.ini`.
     * Add your API keys for services like SecurityTrails, VirusTotal, Pentest-Tools, etc., if you wish to enable more extensive passive reconnaissance.
+
 
 ### Running the Application
 

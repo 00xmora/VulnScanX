@@ -78,6 +78,8 @@ VulnScanX/
     * **Progress Tracking:** Calculates and emits real-time progress percentages and concise messages to the frontend via WebSockets.
     * **Temporary File Management:** Handles creation and cleanup of temporary files used by various external tools.
     * **Interactive Login Integration:** Utilizes `threading.Event` objects to pause the scan thread, allowing the user to perform manual login in a separate browser window, and then resumes upon receiving a signal from the UI.
+* **`install.sh`**:
+    * **Automated Tool Installation:** A shell script designed to automate the installation of Go, Go-based tools (Amass, Subfinder, httpx, DalFox, FFUF), and Python-based tools (DNSRecon, sqlmap, commix) on Linux-like systems. It also handles Python dependencies from `requirements.txt`.
 * **`static/` (Frontend Assets)**:
     * **`css/style.css`**: Defines the application's modern dark theme, responsive layout, fixed header, full-width content sections, and detailed styling for all UI elements (forms, tables, buttons, custom modals, progress bar, severity indicators).
     * **`js/script.js`**: The main client-side JavaScript, responsible for all frontend interactivity.
