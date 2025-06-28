@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VulnScanX - Your Cybersecurity Tool</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+</head>
+<body>
+
+    <header class="fixed-header"> <h1>VulnScanX</h1>
+        <nav>
+            <ul>
+                <li><a href="/">Home</a></li>
+                <li><a href="/results">Results</a></li>
+                <li><a href="/history">History</a></li>
+                <li><a href="/blog">Blog</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <div class="app-wrapper">
+        <main>
+            <section id="hero">
+                <div class="hero-section__content">
+                    <h2>Welcome to VulnScanX</h2>
+                    <p>Your powerful tool for comprehensive cybersecurity scans.</p>
+                </div>
+            </section>
+
+            <section id="scan-tool" class="scan-input-area">
+                <h2 class="scan-input-area__title">Start a New Scan</h2>
+                <form id="scan-form" class="scan-input-area__form">
+                    <div class="scan-input-area__group">
+                        <label for="url" class="scan-input-area__label">Target URL:</label>
+                        <input type="text" id="url" name="url" placeholder="e.g., https://example.com" required class="scan-input-area__input">
+                    </div>
+
+                    <div class="scan-input-area__group">
+                        <label for="scan_type" class="scan-input-area__label">Scan Type:</label>
+                        <select id="scan-type" name="scan_type" class="scan-input-area__select"> <option value="full">Full Scan (Recommended)</option>
+                            <option value="custom">Custom Scan</option>
+                        </select>
+                    </div>
+
+                    <div id="recon-options" style="display: none;"> <h3 class="scan-input-area__title">Reconnaissance Options</h3>
+                        <div class="scan-input-area__group scan-input-area__checkbox-group">
+                            <input type="checkbox" id="passive-subdomain" name="passive_subdomain">
+                            <label for="passive-subdomain">Passive Subdomain Enumeration</label>
+                        </div>
+                        <div class="scan-input-area__group scan-input-area__checkbox-group">
+                            <input type="checkbox" id="active-subdomain" name="active_subdomain">
+                            <label for="active-subdomain">Active Subdomain Enumeration</label>
+                        </div>
+                        <div class="scan-input-area__group scan-input-area__checkbox-group">
+                            <input type="checkbox" id="passive-crawl" name="passive_crawl">
+                            <label for="passive-crawl">Passive URL Crawling (Wayback, SecurityTrails)</label>
+                        </div>
+                        <div class="scan-input-area__group scan-input-area__checkbox-group">
+                            <input type="checkbox" id="active-crawl" name="active_crawl">
+                            <label for="active-crawl">Active URL Crawling (Selenium)</label>
+                        </div>
+                        <div class="scan-input-area__group scan-input-area__checkbox-group">
+                            <input type="checkbox" id="open-browser" name="open_browser">
+                            <label for="open-browser">Open Browser When Active Crawl (for login)</label>
+                        </div>
+                        <div class="scan-input-area__group">
+                            <label for="wordlist-path" class="scan-input-area__label">Wordlist Path (for active recon tools):</label>
+                            <input type="text" id="wordlist-path" name="wordlist_path" placeholder="/usr/share/seclists/Discovery/DNS/subdomains-top1million-110000.txt" class="scan-input-area__input">
+                        </div>
+                    </div>
+
+
+                    <div id="custom-scan-options" style="display: none;">
+                        <h3 class="scan-input-area__title">Custom Scan Tool Options</h3>
+                        <div class="scan-input-area__group scan-input-area__checkbox-group">
+                            <input type="checkbox" id="crawling" name="crawling">
+                            <label for="crawling">General Endpoint Discovery (If no specific crawl selected)</label>
+                        </div>
+                        <div class="scan-input-area__group scan-input-area__checkbox-group">
+                            <input type="checkbox" id="xss" name="xss">
+                            <label for="xss">XSS Scan</label>
+                        </div>
+                        <div class="scan-input-area__group scan-input-area__checkbox-group">
+                            <input type="checkbox" id="sql-injection" name="sql_injection"> <label for="sql-injection">SQL Injection Scan</label>
+                        </div>
+                        <div class="scan-input-area__group scan-input-area__checkbox-group">
+                            <input type="checkbox" id="command-injection" name="command_injection"> <label for="command-injection">Command Injection Scan</label>
+                        </div>
+                        <div class="scan-input-area__group scan-input-area__checkbox-group">
+                            <input type="checkbox" id="idor" name="idor">
+                            <label for="idor">IDOR Scan</label>
+                        </div>
+                        <div class="scan-input-area__group scan-input-area__checkbox-group">
+                            <input type="checkbox" id="csrf" name="csrf">
+                            <label for="csrf">CSRF Scan</label>
+                        </div>
+                    </div>
+
+                    <div class="scan-input-area__group">
+                        <label for="headers" class="scan-input-area__label">Custom Headers (JSON format, optional):</label>
+                        <textarea id="headers" name="headers" placeholder='{"Authorization": "Bearer YOUR_TOKEN"}' rows="4" class="scan-input-area__input"></textarea>
+                    </div>
+
+                    <button type="submit" class="scan-input-area__button">Start Scan</button>
+                </form>
+
+                <div id="progress-bar-container"></div> <div id="scan-progress" class="scan-status-area"></div>
+                <div id="scan-results" class="scan-results-overview"></div>
+            </section>
+        </main>
+    </div>
+
+    <footer>
+        <p>&copy; 2024 VulnScanX. All rights reserved.</p>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <div id="custom-modal"></div> </body>
+</html>

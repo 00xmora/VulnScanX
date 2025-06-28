@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan Results - VulnScanX</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body>
+    <header class="fixed-header">
+        <h1>VulnScanX</h1>
+        <nav>
+            <ul>
+                <li><a href="/">Home</a></li>
+                <li><a href="/results">Results</a></li>
+                <li><a href="/history">History</a></li>
+                <li><a href="/blog">Blog</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section id="results-section" class="section">
+            <h2 id="scan-results-header">Scan Results</h2>
+            <div id="scan-target-info" class="scan-target-info-box">
+                <!-- This will be populated by JavaScript -->
+                <p>Loading scan results...</p>
+            </div>
+
+            <div class="results-overview-cards">
+                <div class="card">
+                    <h3>Total Vulnerabilities</h3>
+                    <p id="total-vulns">0</p>
+                </div>
+                <div class="card">
+                    <h3>High Severity</h3>
+                    <p id="high-vulns" class="severity-count high">0</p>
+                </div>
+                <div class="card">
+                    <h3>Medium Severity</h3>
+                    <p id="medium-vulns" class="severity-count medium">0</p>
+                </div>
+                <div class="card">
+                    <h3>Low Severity</h3>
+                    <p id="low-vulns" class="severity-count low">0</p>
+                </div>
+            </div>
+
+            <div class="results-actions" style="text-align: center; margin-bottom: 20px;">
+                <button id="export-scan-json" class="action-btn" data-format="json">Export Scan (JSON)</button>
+                <button id="export-scan-csv" class="action-btn" data-format="csv">Export Scan (CSV)</button>
+                <button id="export-scan-html" class="action-btn" data-format="html">Export Scan (HTML)</button>
+            </div>
+
+            <h3 class="section-subtitle">Vulnerability Severity Distribution</h3>
+            <div class="chart-container" style="width: 100%; max-width: 600px; margin: 20px auto;">
+                <canvas id="severityChart"></canvas>
+            </div>
+
+            <h3 class="section-subtitle">Vulnerabilities Found</h3>
+            <div id="vulnerability-results">
+                <div class="results-table-container">
+                    <table id="vulnerabilities-table" class="styled-table">
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th>Severity</th>
+                                <th>Endpoint</th>
+                                <th>Method</th>
+                                <th>Description/Evidence</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Vulnerabilities will be inserted here by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+                <p id="no-vulns-message" class="info-message" style="display: none;">No vulnerabilities found for this scan.</p>
+            </div>
+
+            <h3 class="section-subtitle">Discovered Endpoints</h3>
+            <div id="endpoint-results">
+                <div class="results-table-container">
+                    <table id="endpoints-table" class="styled-table">
+                        <thead>
+                            <tr>
+                                <th>Endpoint</th>
+                                <th>Method</th>
+                                <th>Copy</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Endpoints will be inserted here by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+                <p id="no-endpoints-message" class="info-message" style="display: none;">No unique endpoints discovered for this scan.</p>
+            </div>
+
+            <h3 class="section-subtitle">Reconnaissance Results</h3>
+            <div id="recon-results">
+                <div class="results-table-container">
+                    <table id="recon-table" class="styled-table">
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th>Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Recon results will be inserted here by JavaScript -->
+                        </tbody>
+                    </table>
+                </div>
+                <p id="no-recon-message" class="info-message" style="display: none;">No reconnaissance results for this scan.</p>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 VulnScanX. All rights reserved.</p>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script> <!-- NEW: html2pdf.js library -->
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <div id="custom-modal"></div>
+</body>
+</html>

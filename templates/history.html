@@ -1,0 +1,78 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan History - VulnScanX</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+</head>
+<body>
+    <header class="fixed-header">
+        <h1>VulnScanX</h1>
+        <nav>
+            <ul>
+                <li><a href="/">Home</a></li>
+                <li><a href="/results">Results</a></li>
+                <li><a href="/history">History</a></li>
+                <li><a href="/blog">Blog</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section id="history-section" class="section">
+            <h2>Scan History</h2>
+
+            <div class="history-actions">
+                <button id="export-history-json" class="action-btn">Export All (JSON)</button>
+                <button id="export-history-csv" class="action-btn">Export All (CSV)</button>
+                <button id="export-history-html" class="action-btn">Export All (HTML)</button>
+            </div>
+
+            <div class="history-table-container">
+                <table id="history-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Domain</th>
+                            <th>Scan Date</th>
+                            <th>Vulnerabilities Found</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if scan_history %}
+                            {% for scan in scan_history %}
+                                <tr>
+                                    <td>{{ scan.id }}</td>
+                                    <td>{{ scan.domain }}</td>
+                                    <td>{{ scan.scan_date }}</td>
+                                    <td>{{ scan.num_vulnerabilities }} ({{ scan.vulnerabilities_summary }})</td>
+                                    <td class="history-actions-cell">
+                                        <a href="/results?scan_id={{ scan.id }}" class="action-btn view-results-btn" data-scan-id="{{ scan.id }}">View Details</a>
+                                        <button class="action-btn delete-scan-btn" data-scan-id="{{ scan.id }}">Delete</button>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr>
+                                <td colspan="5">No scan history available.</td>
+                            </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 VulnScanX. All rights reserved.</p>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.min.js"></script>
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+    <div id="custom-modal"></div>
+</body>
+</html>

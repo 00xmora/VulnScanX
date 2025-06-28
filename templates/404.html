@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Page Not Found - VulnScanX</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+    <style>
+        /* Add specific styles for the 404 page if needed, or rely on main style.css */
+        .error-container {
+            text-align: center;
+            padding: 80px 20px;
+            max-width: 800px;
+            margin: 50px auto;
+            background-color: #2a2a2a;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+        }
+        .error-container h1 {
+            font-size: 5rem;
+            color: #ff4757; /* Red color for error */
+            margin-bottom: 20px;
+        }
+        .error-container h2 {
+            font-size: 2.5rem;
+            color: #e0e0e0;
+            margin-bottom: 20px;
+        }
+        .error-container p {
+            font-size: 1.2rem;
+            color: #ccc;
+            margin-bottom: 30px;
+        }
+        .error-container a {
+            display: inline-block;
+            padding: 12px 25px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, #6a11cb, #2575fc);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .error-container a:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(106, 17, 203, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <header class="fixed-header">
+        <h1>VulnScanX</h1>
+        <nav>
+            <ul>
+                <li><a href="/">Home</a></li>
+                <li><a href="/results">Results</a></li>
+                <li><a href="/history">History</a></li>
+                <li><a href="/blog">Blog</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section class="error-container">
+            <h1>404</h1>
+            <h2>Page Not Found</h2>
+            <p>Oops! The page you are looking for might have been removed or is temporarily unavailable.</p>
+            <a href="/">Go to Homepage</a>
+        </section>
+    </main>
+
+    <footer>
+        <p>&copy; 2024 VulnScanX. All rights reserved.</p>
+    </footer>
+</body>
+</html>

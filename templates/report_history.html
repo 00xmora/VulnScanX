@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VulnScanX Scan History Report</title>
+    <style>
+        /* General Body and Text Styles */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+            background-color: #f8f8f8;
+        }
+        
+        /* Headers */
+        h1, h2, h3, h4 {
+            color: #0056b3;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        h1 {
+            text-align: center;
+            font-size: 2.5em;
+            margin-bottom: 30px;
+            color: #1a1a1a;
+        }
+        h2 {
+            font-size: 1.8em;
+            border-bottom: 2px solid #0056b3;
+            padding-bottom: 8px;
+            margin-top: 30px;
+            color: #1a1a1a;
+        }
+        h3 {
+            font-size: 1.4em;
+            color: #0056b3;
+            margin-top: 25px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 5px;
+        }
+
+        /* Report Header Section */
+        .report-header {
+            text-align: center;
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #ccc;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            padding-top: 20px;
+        }
+        .report-header p {
+            margin: 5px 0;
+            font-size: 1.1em;
+            color: #555;
+        }
+
+        /* Scan Entry Styling */
+        .scan-entry {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 30px;
+            padding: 20px;
+            background-color: #ffffff;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .scan-entry p strong {
+            color: #444;
+        }
+
+        /* Chart Container (for individual scans within history report) */
+        .chart-container {
+            text-align: center;
+            margin: 20px auto;
+            padding: 15px;
+            background-color: #fcfcfc;
+            border: 1px solid #eee;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            max-width: 500px; /* Chart image width */
+        }
+        .chart-container img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            margin: 0 auto;
+        }
+
+        /* Table Styles */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+            background-color: #ffffff;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        th, td {
+            border: 1px solid #eee;
+            padding: 10px 15px;
+            text-align: left;
+            vertical-align: top;
+            font-size: 0.95em;
+        }
+        th {
+            background-color: #e9ecef;
+            font-weight: bold;
+            color: #495057;
+            text-transform: uppercase;
+        }
+        tr:nth-child(even) {
+            background-color: #f6f6f6;
+        }
+        tr:hover {
+            background-color: #e2e6ea;
+        }
+
+        /* Severity Badges */
+        .severity {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: bold;
+            color: white;
+            text-align: center;
+            min-width: 60px;
+        }
+        .severity.high { background-color: #dc3545; }
+        .severity.medium { background-color: #ffc107; color: #333; }
+        .severity.low { background-color: #28a745; }
+        .severity.info { background-color: #17a2b8; }
+        .severity.n-a { background-color: #6c757d; }
+
+        /* No Data Message */
+        .no-data {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            padding: 15px;
+            background-color: #f0f0f0;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+
+        /* PDF Specific Styles (for page breaks) */
+        .section-break {
+            page-break-before: always;
+        }
+    </style>
+</head>
+<body>
+    <div class="report-header">
+        <h1>VulnScanX Scan History Report</h1>
+        <p>Generated on: {{ generation_date }}</p>
+        <p>Total Scans: {{ all_scan_data|length }}</p>
+    </div>
+
+    {% for scan in all_scan_data %}
+    <div class="scan-entry {% if not loop.first %}section-break{% endif %}">
+        <h2>Scan ID: {{ scan.scan_id }} - {{ scan.domain }}</h2>
+        <p><strong>Scan Date:</strong> {{ scan.scan_date }}</p>
+
+        {% if scan.chart_image_b64 %}
+        <div class="chart-container">
+            <h3>Vulnerability Severity Distribution</h3>
+            <img src="data:image/png;base64,{{ scan.chart_image_b64 }}" alt="Severity Distribution Chart">
+        </div>
+        {% endif %}
+
+        <h3>Vulnerabilities ({{ scan.vulnerabilities|length }})</h3>
+        {% if scan.vulnerabilities %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Severity</th>
+                    <th>Endpoint</th>
+                    <th>Method</th>
+                    <th>Description/Evidence</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for vuln in scan.vulnerabilities %}
+                <tr>
+                    <td>{{ vuln.vulnerability|default('N/A') }}</td>
+                    <td><span class="severity {{ vuln.severity|lower|default('n-a') }}">{{ vuln.severity|default('N/A') }}</span></td>
+                    <td>{{ vuln.url|default('N/A') }}</td>
+                    <td>{{ vuln.method|default('N/A') }}</td>
+                    <td>{{ vuln.description|default(vuln.evidence)|default('N/A') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="no-data">No vulnerabilities detected for this scan.</p>
+        {% endif %}
+
+        <h3>Discovered Endpoints ({{ scan.endpoints|length }})</h3>
+        {% if scan.endpoints %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Endpoint</th>
+                    <th>Method</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for endpoint in scan.endpoints %}
+                <tr>
+                    <td>{{ endpoint.url|default('N/A') }}</td>
+                    <td>{{ endpoint.method|default('N/A') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="no-data">No endpoints discovered for this scan.</p>
+        {% endif %}
+
+        <h3>Reconnaissance Results ({{ scan.recon_results|length }})</h3>
+        {% if scan.recon_results %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for recon in scan.recon_results %}
+                <tr>
+                    <td>{{ recon.type|default('N/A') }}</td>
+                    <td>{{ recon.value|default('N/A') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="no-data">No reconnaissance results for this scan.</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+</body>
+</html>
