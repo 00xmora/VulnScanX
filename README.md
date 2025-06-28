@@ -1,6 +1,6 @@
 # VulnScanX: Automated Web Vulnerability Scanner
 
-![VulnScanX Screenshot](https://github.com/user-attachments/assets/76373347-a11f-4415-8315-4ca14193ce6e) <!-- Replace with a relevant screenshot -->
+![VulnScanX Screenshot](/documentation/logo.png) <!-- Replace with a relevant screenshot -->
 
 VulnScanX is a powerful, web-based automated vulnerability scanning tool designed to help identify common security flaws in web applications. Built with Python (Flask) and modern frontend technologies, it provides a comprehensive suite of reconnaissance and vulnerability detection capabilities, offering real-time progress updates, detailed reports, and a user-friendly interface.
 
