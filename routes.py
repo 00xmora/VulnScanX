@@ -224,6 +224,24 @@ def start_scan_api():
     finally:
         session.close()
 
+@api_bp.route("/scans/<int:scan_id>/login_complete", methods=["POST"])
+def signal_login_complete_api(scan_id):
+    """
+    API endpoint to signal that manual login for a scan is complete.
+    This will set the threading.Event associated with the scan_id.
+    """
+    scan_login_events = current_app.config['SCAN_LOGIN_EVENTS']
+    if scan_id in scan_login_events:
+        login_event = scan_login_events[scan_id]
+        login_event.set() # Set the event to unblock the scan thread
+        # Optionally remove the event from the dict if it's no longer needed after being set
+        del scan_login_events[scan_id] 
+        current_app.logger.info(f"Login complete signal received for scan ID: {scan_id}")
+        return jsonify({"message": f"Login complete signal processed for scan ID {scan_id}."}), 200
+    else:
+        return jsonify({"error": "Not Found", "details": f"No active login event found for scan ID {scan_id}."}), 404
+
+
 @api_bp.route("/scans/<int:scan_id>/results", methods=["GET"])
 def get_scan_results_api(scan_id):
     """

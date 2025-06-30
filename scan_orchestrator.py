@@ -8,7 +8,8 @@ from tools import commandinjection, dalfox, sqlinjection, autorecon, idor, csrf 
 
 def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, progress_emitter, vulnerability_emitter, num_threads_global, sio_instance,
               passive_crawl_enabled=False, active_crawl_enabled=False, open_browser_for_active_crawl=False,
-              passive_subdomain_enabled=False, active_subdomain_enabled=False, wordlist_path=None):
+              passive_subdomain_enabled=False, active_subdomain_enabled=False, wordlist_path=None,
+              login_event=None): # ADDED login_event
     """
     Performs a full security scan on a target URL.
 
@@ -29,6 +30,7 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
         passive_subdomain_enabled (bool): Enable passive subdomain enumeration.
         active_subdomain_enabled (bool): Enable active subdomain enumeration.
         wordlist_path (str, optional): Path to the wordlist for active enumeration tools.
+        login_event (threading.Event, optional): Event to signal completion of manual login.
     """
     current_session = db_session_factory()
     temp_endpoints_file_path = os.path.join(url_directory, "temp_endpoints_for_tools.txt")
@@ -70,7 +72,8 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
             open_browser_for_active_crawl=open_browser_for_active_crawl,
             passive_subdomain_enabled=passive_subdomain_enabled,
             active_subdomain_enabled=active_subdomain_enabled,
-            wordlist_path=wordlist_path
+            wordlist_path=wordlist_path,
+            login_event=login_event # PASSED login_event
         )
         current_weight += step_weight
         emit_progress_internal(f'{step_name} complete. Retrieving endpoints...', 'info')
@@ -140,7 +143,8 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
 
 def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_scan, url_directory, scan_id, sid, db_session_factory, progress_emitter, vulnerability_emitter, num_threads_global, sio_instance,
                 passive_crawl_enabled=False, active_crawl_enabled=False, open_browser_for_active_crawl=False,
-                passive_subdomain_enabled=False, active_subdomain_enabled=False, wordlist_path=None):
+                passive_subdomain_enabled=False, active_subdomain_enabled=False, wordlist_path=None,
+                login_event=None): # ADDED login_event
     """
     Performs a custom security scan on a target URL based on selected options.
 
@@ -167,6 +171,7 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
         passive_subdomain_enabled (bool): Enable passive subdomain enumeration.
         active_subdomain_enabled (bool): Enable active subdomain enumeration.
         wordlist_path (str, optional): Path to the wordlist for active enumeration tools.
+        login_event (threading.Event, optional): Event to signal completion of manual login.
     """
     current_session = db_session_factory()
     temp_endpoints_file_path = os.path.join(url_directory, "temp_endpoints_for_tools.txt")
@@ -223,7 +228,8 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
                 open_browser_for_active_crawl=open_browser_for_active_crawl,
                 passive_subdomain_enabled=passive_subdomain_enabled,
                 active_subdomain_enabled=active_subdomain_enabled,
-                wordlist_path=wordlist_path
+                wordlist_path=wordlist_path,
+                login_event=login_event # PASSED login_event
             )
             current_weight += step_weight
             emit_progress_internal(f'{step_name} complete. Retrieving endpoints...', 'info')

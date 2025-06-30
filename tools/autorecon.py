@@ -20,6 +20,7 @@ import configparser
 import logging
 from sqlalchemy.exc import IntegrityError
 from tools.database import ReconResult, Endpoint # Import new models
+import threading # ADDED import for threading.Event
 
 # Define colors
 RED = '\033[0;31m'
@@ -329,7 +330,7 @@ def extract_endpoints_from_js(js_content, base_url):
     
     return endpoints
 
-def crawl_website(url, headers=None, max_pages=10, headless=True, session=None, scan_id=None, interactive_login=False):
+def crawl_website(url, headers=None, max_pages=10, headless=True, session=None, scan_id=None, interactive_login=False, login_event=None): # ADDED login_event
     """
     Crawl a website and extract endpoints, saving to DB.
     Args:
@@ -340,6 +341,7 @@ def crawl_website(url, headers=None, max_pages=10, headless=True, session=None, 
         session (sqlalchemy.orm.session.Session): SQLAlchemy session for database operations.
         scan_id (int): ID of the current scan in ScanHistory.
         interactive_login (bool): If True, prompt user to log in manually in browser.
+        login_event (threading.Event, optional): Event to signal completion of manual login.
     Returns:
         list: A list of unique endpoints found.
     """
@@ -366,8 +368,13 @@ def crawl_website(url, headers=None, max_pages=10, headless=True, session=None, 
         driver.get(url) # Initial navigation
 
         if interactive_login and not headless:
-            print(f"{YELLOW}🔒 Please log in manually in the opened Chrome window, then press Enter to continue...{NC}")
-            input() # Wait for user input after manual login
+            print(f"{YELLOW}🔒 Please log in manually in the opened Chrome window. Waiting for signal to continue...{NC}")
+            if login_event: # Check if event is provided
+                login_event.wait() # Wait for the event to be set by the main app
+                print(f"{GREEN}Login signal received. Continuing scan...{NC}")
+            else:
+                input() # Fallback to blocking input if no event is provided
+                print(f"{GREEN}Manual input received. Continuing scan...{NC}")
 
         while urls_to_visit and len(visited_urls) < max_pages:
             current_url = urls_to_visit.pop(0)
@@ -980,7 +987,8 @@ def active_subdomain_enum(domain, session=None, scan_id=None, wordlist_path=None
 
 def autorecon(url, url_directory=None, headers=None, max_pages=10, threads=4, session=None, scan_id=None,
               passive_crawl_enabled=False, active_crawl_enabled=False, open_browser_for_active_crawl=False,
-              passive_subdomain_enabled=False, active_subdomain_enabled=False, wordlist_path=None):
+              passive_subdomain_enabled=False, active_subdomain_enabled=False, wordlist_path=None,
+              login_event=None): # ADDED login_event
     """
     Perform reconnaissance on a target URL with optional subdomain enumeration and crawling.
 
@@ -998,6 +1006,7 @@ def autorecon(url, url_directory=None, headers=None, max_pages=10, threads=4, se
         passive_subdomain_enabled (bool): Enable passive subdomain enumeration.
         active_subdomain_enabled (bool): Enable active subdomain enumeration.
         wordlist_path (str, optional): Path to the wordlist for active enumeration tools.
+        login_event (threading.Event, optional): Event to signal completion of manual login.
     
     Returns:
         dict: Results containing subdomains, endpoints, and any errors.
@@ -1049,7 +1058,8 @@ def autorecon(url, url_directory=None, headers=None, max_pages=10, threads=4, se
             endpoints = crawl_website(url, headers=headers, max_pages=max_pages, 
                                       headless=not open_browser_for_active_crawl, 
                                       session=session, scan_id=scan_id, 
-                                      interactive_login=open_browser_for_active_crawl)
+                                      interactive_login=open_browser_for_active_crawl,
+                                      login_event=login_event) # PASSED login_event
             result["endpoints"].extend(endpoints)
         
         # Fetch all endpoints from the DB for the result

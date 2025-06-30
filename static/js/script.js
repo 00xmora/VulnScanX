@@ -5,6 +5,7 @@ document.addEventListener("DOMContentLoaded", function() {
     const socket = io();
     let currentSocketId = null;
     let severityChartInstance = null; // Global variable to hold the Chart.js instance
+    let currentScanId = null; // Variable to hold the ID of the currently running scan for login signalling
 
     // --- Custom Modal for Alerts/Confirmations ---
     function showModal(message, type = 'info', onConfirm = null) {
@@ -92,7 +93,18 @@ document.addEventListener("DOMContentLoaded", function() {
         console.log('Scan Progress:', data);
         const progressDiv = document.getElementById("scan-progress");
         const progressBar = document.getElementById("scan-progress-bar");
-        const loginContinueBtn = document.getElementById("login-continue-btn");
+        const loginPromptArea = document.getElementById("login-prompt-area"); // Get the login prompt area
+        const loginCompleteBtn = document.getElementById("login-complete-btn"); // Get the login complete button
+
+        // Only update for the currently relevant scan (important if multiple clients or scans)
+        if (currentScanId && data.scan_id !== currentScanId) {
+            return;
+        }
+        
+        // Update currentScanId if it's the first progress update for this scan
+        if (currentScanId === null && data.scan_id) {
+            currentScanId = data.scan_id;
+        }
 
         if (progressDiv) {
             progressDiv.innerHTML += `<p class="${data.status || 'info'}">${data.message}</p>`;
@@ -106,31 +118,32 @@ document.addEventListener("DOMContentLoaded", function() {
         }
 
         // Handle interactive login required status
-        if (data.status === 'login_required') {
-            if (loginContinueBtn) {
-                loginContinueBtn.style.display = 'block';
-                loginContinueBtn.onclick = () => {
-                    socket.emit('login_complete_signal', { scan_id: data.scan_id });
-                    loginContinueBtn.style.display = 'none';
-                    showModal("Login signal sent. Resuming scan...", 'info');
-                };
-            }
-            showModal(`Manual login required for Scan ID ${data.scan_id}. Please complete login in the opened browser window and click 'Continue' below.`, 'warning');
-        } else {
-            if (loginContinueBtn) {
-                loginContinueBtn.style.display = 'none';
-            }
+        if (data.status === 'login_required' && loginPromptArea && loginCompleteBtn) {
+            loginPromptArea.style.display = 'block'; // Show the login prompt area
+            loginCompleteBtn.disabled = false; // Ensure button is enabled
+            showModal(`Manual login required for Scan ID ${data.scan_id}. Please complete login in the opened browser window and click 'I have logged in. Continue scan.' button below.`, 'warning');
+        } else if (loginPromptArea) {
+            // Hide login prompt if status is not 'login_required'
+            loginPromptArea.style.display = 'none';
         }
     });
 
     socket.on('new_vulnerability', function(data) {
         console.log('New Vulnerability:', data);
         if (window.location.pathname === "/results") {
-            addResultRow(data.vulnerability);
-            // Re-render chart and update overview cards with new data
-            // This would require fetching all vulnerabilities again or maintaining a client-side list
-            // For simplicity, we'll update overview cards directly and suggest full chart re-render on page load.
-            updateOverviewCards(); // This needs to be smarter if vulnerabilities are added dynamically
+            // Check if this vulnerability belongs to the current scan being viewed
+            const urlParams = new URLSearchParams(window.location.search);
+            const viewedScanId = parseInt(urlParams.get('scan_id'));
+            if (data.scan_id === viewedScanId) {
+                addResultRow(data.vulnerability);
+                // Re-render chart and update overview cards with new data
+                // This would require fetching all vulnerabilities again or maintaining a client-side list
+                // For simplicity, we'll update overview cards directly and suggest full chart re-render on page load.
+                // For live updates, a more sophisticated client-side data management is needed.
+                // For now, let's just re-fetch and re-display results or trigger a partial update.
+                // This call below will refresh entire results section
+                // if (viewedScanId) fetchAndDisplayScanResults(viewedScanId);
+            }
         }
     });
 
@@ -138,25 +151,33 @@ document.addEventListener("DOMContentLoaded", function() {
         console.log('Scan Complete:', data);
         const progressDiv = document.getElementById("scan-progress");
         const progressBar = document.getElementById("scan-progress-bar");
+        const loginPromptArea = document.getElementById("login-prompt-area");
 
-        if (progressDiv) {
-            progressDiv.innerHTML += `<p class="success">${data.message}</p>`;
-            progressDiv.scrollTop = progressDiv.scrollHeight;
-        }
+        if (data.scan_id === currentScanId) { // Only process for the current scan
+            if (progressDiv) {
+                progressDiv.innerHTML += `<p class="success">${data.message}</p>`;
+                progressDiv.scrollTop = progressDiv.scrollHeight;
+            }
 
-        if (progressBar) {
-            progressBar.style.width = '100%';
-            progressBar.textContent = '100% Complete';
-            progressBar.style.backgroundColor = 'green';
-        }
+            if (progressBar) {
+                progressBar.style.width = '100%';
+                progressBar.textContent = '100% Complete';
+                progressBar.style.backgroundColor = 'green';
+            }
 
-        const scanId = data.scan_id;
-        if (scanId) {
-            showModal("Scan finished! Redirecting to results page...", 'success', () => {
-                window.location.href = `/results?scan_id=${scanId}`;
-            });
-        } else {
-            showModal("Scan finished! No scan ID provided for redirection.", 'success');
+            if (loginPromptArea) {
+                loginPromptArea.style.display = 'none'; // Hide on scan completion
+            }
+
+            const scanId = data.scan_id;
+            if (scanId) {
+                showModal("Scan finished! Redirecting to results page...", 'success', () => {
+                    window.location.href = `/results?scan_id=${scanId}`;
+                });
+            } else {
+                showModal("Scan finished! No scan ID provided for redirection.", 'success');
+            }
+            currentScanId = null; // Reset current scan ID after completion
         }
     });
 
@@ -164,17 +185,25 @@ document.addEventListener("DOMContentLoaded", function() {
         console.error('Scan Error:', data);
         const progressDiv = document.getElementById("scan-progress");
         const progressBar = document.getElementById("scan-progress-bar");
+        const loginPromptArea = document.getElementById("login-prompt-area");
 
-        if (progressDiv) {
-            progressDiv.innerHTML += `<p class="error">${data.message}</p>`;
-            progressDiv.scrollTop = progressDiv.scrollHeight;
-        }
+        if (data.scan_id === currentScanId) { // Only process for the current scan
+            if (progressDiv) {
+                progressDiv.innerHTML += `<p class="error">${data.message}</p>`;
+                progressDiv.scrollTop = progressDiv.scrollHeight;
+            }
 
-        if (progressBar) {
-            progressBar.style.backgroundColor = 'red';
-            progressBar.textContent = `Error at ${data.progress || 0}%`;
+            if (progressBar) {
+                progressBar.style.backgroundColor = 'red';
+                progressBar.textContent = `Error at ${data.progress || 0}%`;
+            }
+            showModal(`Scan Error: ${data.message}`, 'error');
+
+            if (loginPromptArea) {
+                loginPromptArea.style.display = 'none'; // Hide on scan error
+            }
+            currentScanId = null; // Reset current scan ID after error
         }
-        showModal(`Scan Error: ${data.message}`, 'error');
     });
 
     // --- Form Submission Logic ---
@@ -203,17 +232,10 @@ document.addEventListener("DOMContentLoaded", function() {
         `;
         progressBarContainer.appendChild(progressBar);
     }
-
-    let loginContinueBtn = document.getElementById("login-continue-btn");
-    if (!loginContinueBtn && scanProgressDiv) {
-        loginContinueBtn = document.createElement('button');
-        loginContinueBtn.id = 'login-continue-btn';
-        loginContinueBtn.textContent = 'Login Complete - Continue Scan';
-        loginContinueBtn.className = 'action-btn';
-        loginContinueBtn.style.display = 'none';
-        loginContinueBtn.style.marginTop = '15px';
-        scanProgressDiv.parentNode.insertBefore(loginContinueBtn, scanProgressDiv.nextSibling);
-    }
+    
+    // Get the login prompt area and button
+    const loginPromptArea = document.getElementById("login-prompt-area");
+    const loginCompleteBtn = document.getElementById("login-complete-btn");
 
 
     if (scanForm) {
@@ -282,8 +304,11 @@ document.addEventListener("DOMContentLoaded", function() {
                 progressBar.textContent = '0%';
                 progressBar.style.backgroundColor = '#4CAF50';
             }
-            if (loginContinueBtn) {
-                loginContinueBtn.style.display = 'none';
+            if (loginPromptArea) { // Hide login prompt initially on new scan
+                loginPromptArea.style.display = 'none';
+            }
+            if (loginCompleteBtn) { // Disable login complete button initially
+                loginCompleteBtn.disabled = true;
             }
 
 
@@ -301,19 +326,69 @@ document.addEventListener("DOMContentLoaded", function() {
                 return response.json();
             })
             .then(result => {
+                currentScanId = result.scan_id; // Store scan ID
                 console.log(result.message);
                 scanProgressDiv.innerHTML = `<p>${result.message}</p>`;
+
+                // Show login prompt if active crawl and open browser selected
+                if (data["active_crawl"] && data["open_browser"] && loginPromptArea && loginCompleteBtn) {
+                    loginPromptArea.style.display = 'block';
+                    loginCompleteBtn.disabled = false;
+                }
             })
             .catch(error => {
                 console.error("Error starting scan:", error);
                 showModal(`Error starting scan: ${error.message || error}`, 'error');
                 scanProgressDiv.innerHTML = `<p style="color: red;">Error: ${error.message || error}</p>`;
+                currentScanId = null; // Reset scan ID on error
             });
         });
     }
 
+    // New: Event listener for the "Login Complete" button
+    if (loginCompleteBtn) {
+        loginCompleteBtn.addEventListener('click', function() {
+            if (currentScanId) {
+                loginCompleteBtn.disabled = true; // Disable button to prevent multiple clicks
+                const loginPromptArea = document.getElementById("login-prompt-area"); // Re-get inside function for scope
+
+                fetch(`/api/scans/${currentScanId}/login_complete`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(err => { throw new Error(err.details || err.error || 'Unknown error'); });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Login complete signal sent:', data.message);
+                    const progressDiv = document.getElementById("scan-progress");
+                    if (progressDiv) {
+                        progressDiv.innerHTML += `<p class="info">Login completion signal sent. Scan should resume shortly.</p>`;
+                        progressDiv.scrollTop = progressDiv.scrollHeight;
+                    }
+                    if (loginPromptArea) {
+                        loginPromptArea.style.display = 'none'; // Hide the prompt after signaling
+                    }
+                })
+                .catch(error => {
+                    console.error('Error sending login complete signal:', error);
+                    showModal(`Error signaling login completion: ${error.message || error}`, 'error');
+                    loginCompleteBtn.disabled = false; // Re-enable if error occurred
+                });
+            } else {
+                console.warn('No active scan ID to signal login completion.');
+            }
+        });
+    }
+
     // --- Results Display Functions ---
-    function displayResults(scanData) { // Now receives full scanData object
+    // (This part remains largely the same as before, ensure it's not duplicated)
+    function displayResults(scanData) {
         const scanResultsHeader = document.getElementById("scan-results-header");
         const scanTargetInfo = document.getElementById("scan-target-info");
         const noVulnsMessage = document.getElementById("no-vulns-message");
@@ -342,10 +417,10 @@ document.addEventListener("DOMContentLoaded", function() {
         const vulnerabilities = scanData.vulnerabilities || [];
         if (vulnerabilities.length === 0) {
             noVulnsMessage.style.display = 'block';
-            vulnerabilitiesTableBody.closest('.results-table-container').style.display = 'none';
+            if(vulnerabilitiesTableBody) vulnerabilitiesTableBody.closest('.results-table-container').style.display = 'none';
         } else {
             noVulnsMessage.style.display = 'none';
-            vulnerabilitiesTableBody.closest('.results-table-container').style.display = 'block';
+            if(vulnerabilitiesTableBody) vulnerabilitiesTableBody.closest('.results-table-container').style.display = 'block';
             vulnerabilities.sort((a, b) => {
                 const severityOrder = { 'high': 3, 'medium': 2, 'low': 1, 'info': 0, 'n/a': -1 };
                 return severityOrder[b.severity.toLowerCase()] - severityOrder[a.severity.toLowerCase()];
@@ -359,10 +434,10 @@ document.addEventListener("DOMContentLoaded", function() {
         const endpoints = scanData.endpoints || [];
         if (endpoints.length === 0) {
             noEndpointsMessage.style.display = 'block';
-            endpointsTableBody.closest('.results-table-container').style.display = 'none';
+            if(endpointsTableBody) endpointsTableBody.closest('.results-table-container').style.display = 'none';
         } else {
             noEndpointsMessage.style.display = 'none';
-            endpointsTableBody.closest('.results-table-container').style.display = 'block';
+            if(endpointsTableBody) endpointsTableBody.closest('.results-table-container').style.display = 'block';
             endpoints.forEach(endpoint => {
                 addEndpointRow(endpoint);
             });
@@ -372,10 +447,10 @@ document.addEventListener("DOMContentLoaded", function() {
         const reconResults = scanData.recon_results || [];
         if (reconResults.length === 0) {
             noReconMessage.style.display = 'block';
-            reconTableBody.closest('.results-table-container').style.display = 'none';
+            if(reconTableBody) reconTableBody.closest('.results-table-container').style.display = 'none';
         } else {
             noReconMessage.style.display = 'none';
-            reconTableBody.closest('.results-table-container').style.display = 'block';
+            if(reconTableBody) reconTableBody.closest('.results-table-container').style.display = 'block';
             reconResults.forEach(recon => {
                 addReconRow(recon);
             });
@@ -495,7 +570,7 @@ document.addEventListener("DOMContentLoaded", function() {
         if (lowVulns) lowVulns.textContent = lowCount;
     }
 
-    // NEW: Function to render the severity distribution chart
+    // Function to render the severity distribution chart
     function renderSeverityChart(vulnerabilities = []) {
         const ctx = document.getElementById('severityChart');
         if (!ctx) return; // Exit if canvas element is not found
@@ -596,9 +671,9 @@ document.addEventListener("DOMContentLoaded", function() {
                 return 'green';
             case 'info':
             case 'login_required':
-                return '#FFD700';
+                return '#FFD700'; // Using yellow for info/login_required
             default:
-                return '#4CAF50';
+                return '#4CAF50'; // Default green
         }
     }
 
@@ -611,16 +686,22 @@ document.addEventListener("DOMContentLoaded", function() {
         const scanResultsHeader = document.getElementById("scan-results-header");
         const scanTargetInfo = document.getElementById("scan-target-info");
 
-        if (scanId) {
+        // Function to fetch and display scan results
+        const fetchAndDisplayScanResults = (id) => {
             scanResultsHeader.textContent = `Loading Results...`;
-            scanTargetInfo.innerHTML = `<p>Fetching details for Scan ID: ${scanId}...</p>`;
+            scanTargetInfo.innerHTML = `<p>Fetching details for Scan ID: ${id}...</p>`;
 
-            // Attach event listeners for single scan export buttons
-            document.getElementById('export-scan-json').addEventListener('click', () => exportSingleScan(scanId, 'json'));
-            document.getElementById('export-scan-csv').addEventListener('click', () => exportSingleScan(scanId, 'csv'));
-            document.getElementById('export-scan-html').addEventListener('click', () => exportSingleScan(scanId, 'html'));
+            // Attach event listeners for single scan export buttons (ensure they are present)
+            const exportJsonBtn = document.getElementById('export-scan-json');
+            const exportCsvBtn = document.getElementById('export-scan-csv');
+            const exportHtmlBtn = document.getElementById('export-scan-html');
 
-            fetch(`/api/scans/${scanId}/results`)
+            if (exportJsonBtn) exportJsonBtn.addEventListener('click', () => exportSingleScan(id, 'json'));
+            if (exportCsvBtn) exportCsvBtn.addEventListener('click', () => exportSingleScan(id, 'csv'));
+            if (exportHtmlBtn) exportHtmlBtn.addEventListener('click', () => exportSingleScan(id, 'html'));
+
+
+            fetch(`/api/scans/${id}/results`)
                 .then(response => {
                     if (!response.ok) {
                         return response.json().then(err => { throw new Error(err.details || err.error || 'Unknown error'); });
@@ -639,6 +720,10 @@ document.addEventListener("DOMContentLoaded", function() {
                     scanTargetInfo.innerHTML = `<p style="color: red;">Failed to load results: ${error.message || error}</p>`;
                     scanResultsHeader.textContent = "Scan Results";
                 });
+        };
+
+        if (scanId) {
+            fetchAndDisplayScanResults(scanId); // Call the function to fetch and display
         } else {
             scanResultsHeader.textContent = "Scan Results";
             scanTargetInfo.innerHTML = "<p>Please specify a Scan ID to view results (e.g., /results?scan_id=123).</p>";
