@@ -4,7 +4,7 @@ import time
 
 def gemini(prompt):
     """Sends a request to the Gemini API to generate content based on the provided prompt."""
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = "AIzaSyCm9QA4uuZTEuICKCK9VSafYELjE0HbFr4"
     if not api_key:
         return "Error: GEMINI_API_KEY environment variable not set."
 

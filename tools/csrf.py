@@ -144,15 +144,24 @@ def csrfCheck(request_data, session, scan_id):
         # Extract token for further testing if available
         csrf_parameter = ai_response.get("csrf_parameter", "N/A")
         csrf_token_value = ai_response.get("csrf_token_value", "")
-        
-        if ai_response.get("vulnerable") is True:
-            vulnerability_type = "CSRF (Potential)"
-            severity = "medium" # Mark as potential medium if AI says vulnerable
+        flag = 0 # 0 : No Vulnerability -- 1 : Vulnerability detected -- 2 : Potention vulnerability
+        if ai_response.get("vulnerable") is True and ai_response['defense_mechanisms'][0] == "None":
+            vulnerability_type = "CSRF"
+            severity = "High" # Mark as potential medium if AI says vulnerable
             description = f"Potential CSRF vulnerability: {ai_response.get('reason')}. Defense mechanisms detected: {', '.join(ai_response.get('defense_mechanisms', ['None']))}"
             print(f"{YELLOW}   [!] AI indicates potential CSRF vulnerability for {request_data.get('url', 'N/A')}{NC}")
+            flag = 1
+            
+        elif ai_response.get("vulnerable") is True and ai_response['defense_mechanisms'][0] != "None":
+            vulnerability_type = "CSRF (Potential)"
+            severity = "Mediam" # Mark as potential medium if AI says vulnerable
+            description = f"Potential CSRF vulnerability: {ai_response.get('reason')}. Defense mechanisms detected: {', '.join(ai_response.get('defense_mechanisms', ['None']))}"
+            print(f"{YELLOW}   [!] AI indicates potential CSRF vulnerability for {request_data.get('url', 'N/A')}{NC}")
+            flag=2
         else:
             description = f"No immediate CSRF vulnerability detected by AI. Defenses: {', '.join(ai_response.get('defense_mechanisms', ['None']))}"
             print(f"{GREEN}   [+] AI indicates no immediate CSRF vulnerability for {request_data.get('url', 'N/A')}{NC}")
+            
 
         vuln_data = {
             "vulnerability": vulnerability_type,
@@ -162,10 +171,10 @@ def csrfCheck(request_data, session, scan_id):
             "description": description,
             "ai_analysis": ai_response # Store full AI analysis for context
         }
-
-        try_save_vulnerability(vuln_data, session, scan_id)
-
-        return ai_response # Return AI response for further testing
+        
+        if flag == 1:
+            try_save_vulnerability(vuln_data, session, scan_id)
+        return ai_response,flag # Return AI response for further testing
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse Gemini response for CSRF check for request {request_data.get('url', 'N/A')}: {str(e)}")
         logger.error(f"Raw response was: {gemini_output}")
@@ -229,6 +238,21 @@ def csrfTests(ai_analysis_response, original_request_data, session, scan_id):
     # For automated testing, this might be a known valid token if available, or extracted via scraping.
     valid_csrf_token = ai_analysis_response.get("csrf_token_value", "") # Token extracted by AI for original request
 
+    # Analyze responses for successful action (heuristic)
+    # Common indicators of successful action: 200 OK, redirect (3xx), specific success messages.
+    # Common indicators of failed CSRF: 403 Forbidden, 400 Bad Request (invalid token), error messages.
+
+    def is_successful_action(response):
+        if not response or response.get("error"):
+            return False
+        status = response.get("status")
+        body = response.get("response_body", "").lower()
+        if status in [200, 302, 301, 204]: # 204 No Content also indicates success
+            if "error" in body or "fail" in body or "invalid token" in body or "forbidden" in body:
+                return False
+            return True
+        return False
+
     # --- Test 1: Request without any CSRF token ---
     test_1_body = body.copy()
     if csrf_parameter and csrf_parameter in test_1_body:
@@ -242,6 +266,19 @@ def csrfTests(ai_analysis_response, original_request_data, session, scan_id):
     print(f"   [ ] Test 1: Request without CSRF token and potentially without Referer")
     res1 = send_request({"url": url, "method": method, "body_params": test_1_body, "extra_headers": test_1_headers})
     
+    if is_successful_action(res1):
+        vuln_data = {
+            "vulnerability": "CSRF (No Token)",
+            "severity": "high",
+            "url": url,
+            "method": method,
+            "description": f"Vulnerable to CSRF (no token): Request succeeded after removing CSRF token. Status: {res1.get('status')}",
+            "evidence": res1.get('response_body', '')[:500]
+        }
+        try_save_vulnerability(vuln_data, session, scan_id)
+        print(f"{GREEN}   [+] CSRF (No Token) vulnerability confirmed for {url}{NC}")
+        return
+    
     # --- Test 2: Request with invalid/empty CSRF token ---
     test_2_body = body.copy()
     if csrf_parameter:
@@ -254,43 +291,6 @@ def csrfTests(ai_analysis_response, original_request_data, session, scan_id):
     print(f"   [ ] Test 2: Request with invalid CSRF token")
     res2 = send_request({"url": url, "method": method, "body_params": test_2_body, "extra_headers": test_2_headers})
 
-    # --- Test 3: Request with a valid token but from a different "origin" (simulated by removing Referer) ---
-    test_3_body = body.copy()
-    # Keep original valid token if it exists in body
-    
-    test_3_headers = headers.copy()
-    test_3_headers.pop("Referer", None) # Remove Referer to simulate cross-origin
-    
-    print(f"   [ ] Test 3: Request with valid token but no Referer")
-    res3 = send_request({"url": url, "method": method, "body_params": test_3_body, "extra_headers": test_3_headers})
-
-    # Analyze responses for successful action (heuristic)
-    # Common indicators of successful action: 200 OK, redirect (3xx), specific success messages.
-    # Common indicators of failed CSRF: 403 Forbidden, 400 Bad Request (invalid token), error messages.
-    
-    def is_successful_action(response):
-        if not response or response.get("error"):
-            return False
-        status = response.get("status")
-        body = response.get("response_body", "").lower()
-        if status in [200, 302, 301, 204]: # 204 No Content also indicates success
-            if "error" in body or "fail" in body or "invalid token" in body or "forbidden" in body:
-                return False
-            return True
-        return False
-
-    if is_successful_action(res1):
-        vuln_data = {
-            "vulnerability": "CSRF (No Token)",
-            "severity": "high",
-            "url": url,
-            "method": method,
-            "description": f"Vulnerable to CSRF (no token): Request succeeded after removing CSRF token. Status: {res1.get('status')}",
-            "evidence": res1.get('response_body', '')[:500]
-        }
-        try_save_vulnerability(vuln_data, session, scan_id)
-        print(f"{GREEN}   [+] CSRF (No Token) vulnerability confirmed for {url}{NC}")
-
     if is_successful_action(res2):
         vuln_data = {
             "vulnerability": "CSRF (Invalid Token)",
@@ -302,6 +302,17 @@ def csrfTests(ai_analysis_response, original_request_data, session, scan_id):
         }
         try_save_vulnerability(vuln_data, session, scan_id)
         print(f"{GREEN}   [+] CSRF (Invalid Token) vulnerability confirmed for {url}{NC}")
+        return
+
+    # --- Test 3: Request with a valid token but from a different "origin" (simulated by removing Referer) ---
+    test_3_body = body.copy()
+    # Keep original valid token if it exists in body
+    
+    test_3_headers = headers.copy()
+    test_3_headers.pop("Referer", None) # Remove Referer to simulate cross-origin
+    
+    print(f"   [ ] Test 3: Request with valid token but no Referer")
+    res3 = send_request({"url": url, "method": method, "body_params": test_3_body, "extra_headers": test_3_headers})
 
     if is_successful_action(res3) and "SameSite=Strict" not in ai_analysis_response.get("defense_mechanisms", []) and "Referer Check" not in ai_analysis_response.get("defense_mechanisms", []):
         vuln_data = {
@@ -316,6 +327,16 @@ def csrfTests(ai_analysis_response, original_request_data, session, scan_id):
         print(f"{GREEN}   [+] CSRF (Referer Bypass/SameSite Lax) vulnerability confirmed for {url}{NC}")
 
     print(f"{GREEN}[+] CSRF tests completed for {url}.{NC}")
+    return
+    
+    
+    
+
+    
+
+    
+
+    
 
 # Main CSRF function
 def csrf(urls_file_path, session=None, scan_id=None):
@@ -377,11 +398,13 @@ def csrf(urls_file_path, session=None, scan_id=None):
 
     for req_data in requests_data_for_ai:
         # Step 1: AI analysis for CSRF defense mechanisms
-        ai_res = csrfCheck(req_data, session, scan_id)
+        ai_res,flag = csrfCheck(req_data, session, scan_id)
+        print("flag: ",flag)
+        if flag == 2:
+            # Step 2: Perform active CSRF tests based on AI analysis
+            if ai_res: # Only proceed if AI analysis was successful
+                csrfTests(ai_res, req_data, session, scan_id)
         
-        # Step 2: Perform active CSRF tests based on AI analysis
-        if ai_res: # Only proceed if AI analysis was successful
-            csrfTests(ai_res, req_data, session, scan_id)
 
     print(f"{GREEN}[+] CSRF scan completed. Results stored in database.{NC}")
 
