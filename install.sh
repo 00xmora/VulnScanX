@@ -16,7 +16,7 @@ OS=$(go env GOOS)
 ARCH=$(go env GOARCH)
 
 if [ -z "$OS" ]; then
-    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+    OS=$(uname -s | tr '[:upper:]' '[:lower__]')
 fi
 if [ -z "$ARCH" ]; then
     ARCH=$(uname -m)
@@ -73,12 +73,28 @@ else
     echo "pipx is already installed."
 fi
 
+# Create and activate a virtual environment for the application's Python dependencies
+VENV_DIR=".venv_vulnscanx"
+echo -e "\n[+] Creating and activating Python virtual environment in $VENV_DIR..."
+python3 -m venv "$VENV_DIR" || { echo "Failed to create virtual environment. Aborting."; exit 1; }
+source "$VENV_DIR"/bin/activate || { echo "Failed to activate virtual environment. Aborting."; exit 1; }
+echo "Virtual environment activated."
+
 # Create a temporary requirements file for main app dependencies, excluding CLI tools
 TEMP_REQUIREMENTS_FILE="temp_app_requirements.txt"
+# Filter out python CLI tools that are installed via pipx or other means
+# Ensure to update this list if you add/remove Python CLI tools.
 grep -vE '^(dnsrecon|sublist3r|sqlmap|commix)' requirements.txt > "$TEMP_REQUIREMENTS_FILE"
 
-pip install -r "$TEMP_REQUIREMENTS_FILE" || { echo "Failed to install main Python dependencies. Aborting."; exit 1; }
+# Install dependencies into the virtual environment
+pip install -r "$TEMP_REQUIREMENTS_FILE" || { echo "Failed to install main Python dependencies into virtual environment. Aborting."; exit 1; }
 rm "$TEMP_REQUIREMENTS_FILE"
+echo "Python dependencies installed into virtual environment."
+
+# Deactivate the virtual environment after installation (optional, but good practice for scripts)
+deactivate
+echo "Virtual environment deactivated for script execution. Remember to activate it manually for development: source $VENV_DIR/bin/activate"
+
 
 # --- Install External Tools (Go-based) ---
 echo -e "\n[+] Installing Go-based tools (DalFox, Amass, Subfinder, httpx, ffuf)..."
@@ -154,4 +170,7 @@ fi
 
 echo -e "\nInstallation script finished. Please ensure all tools are in your PATH."
 echo "You might need to restart your terminal or run 'source ~/.profile' or 'source ~/.bashrc'."
+echo "To run the main application, you will need to activate the virtual environment first:"
+echo "source $VENV_DIR/bin/activate"
+echo "Then you can run your Python application."
 echo "Verify installations by typing tool names (e.g., 'dalfox', 'amass', 'sqlmap')."
