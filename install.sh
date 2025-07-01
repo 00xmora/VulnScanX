@@ -99,7 +99,18 @@ echo "Virtual environment deactivated for script execution. Remember to activate
 # --- Install Selenium WebDrivers (Chromedriver/Geckodriver) ---
 echo -e "\n[+] Installing Selenium WebDrivers..."
 # Detect OS and Architecture for WebDriver download
-UNAME_OS=$(uname -s | tr '[:upper:]' '[:lower__]')
+UNAME_RAW_OS=$(uname -s)
+UNAME_OS=""
+if [[ "$UNAME_RAW_OS" == "Linux" ]]; then
+    UNAME_OS="linux"
+elif [[ "$UNAME_RAW_OS" == "Darwin" ]]; then
+    UNAME_OS="darwin"
+elif [[ "$UNAME_RAW_OS" == *"MINGW"* || "$UNAME_RAW_OS" == *"MSYS"* ]]; then # For Git Bash on Windows
+    UNAME_OS="windows"
+else
+    UNAME_OS=$(echo "$UNAME_RAW_OS" | tr '[:upper:]' '[:lower:]') # Fallback to original tr if specific matches fail
+fi
+
 UNAME_ARCH=$(uname -m)
 
 # Try installing ChromeDriver first
