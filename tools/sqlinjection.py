@@ -3,10 +3,11 @@ import os
 import time
 import subprocess
 import threading
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse, urlencode
 import logging
+import json
 from sqlalchemy.exc import IntegrityError
-from tools.database import Vulnerability # Import the Vulnerability model
+from tools.database import Vulnerability, Endpoint # Import the Vulnerability and Endpoint models
 
 # Define colors for console output
 RED = '\033[0;31m'
@@ -21,16 +22,6 @@ BOLD = '\033[1m'
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Function to read URLs from a file
-def read_urls_from_file(file_path):
-    try:
-        with open(file_path, 'r') as file:
-            urls = [line.strip() for line in file if line.strip()]
-        return urls
-    except FileNotFoundError:
-        print(f"{RED}[!] Error: URLs file not found at {file_path}{NC}")
-        return []
-
 # Function to execute a command and capture output
 def run_command_capture_output(command):
     try:
@@ -40,57 +31,115 @@ def run_command_capture_output(command):
         print(f"{RED}An unexpected error occurred during command execution: {e}{NC}")
         return "", str(e), 1
 
-def run_sqlmap(url, output_dir, session, scan_id):
-    print(f"{YELLOW}[+] Running SQLMap for SQL Injection scanning on: {url}{NC}")
+def run_sqlmap(endpoint_data, output_dir, session, scan_id):
+    url = endpoint_data['url']
+    method = endpoint_data.get('method', 'GET').upper()
+    headers = endpoint_data.get('extra_headers', {})
+    body_params = endpoint_data.get('body_params', {})
+
+    print(f"{YELLOW}[+] Running SQLMap for SQL Injection scanning on: {url} ({method}){NC}")
 
     # Check if sqlmap is installed
     if not subprocess.run("command -v sqlmap", shell=True, capture_output=True).returncode == 0:
         print(f"{RED}[!] SQLMap is not installed or not in PATH. Please install it to use SQL Injection scanning. Skipping.{NC}")
         return
 
-    # SQLMap can output JSON. Using --batch for automated execution.
-    # --dump-format=JSON is for dumping data from databases, not for vulnerability reports directly.
-    # We will use --dump to capture stdout/stderr for vulnerability messages.
-    # Also, --level and --risk can be configured based on desired scan depth.
-    # Using --forms, --crawl, --batch to make it more comprehensive.
-    
-    # Create a unique output directory for each URL to avoid conflicts for sqlmap
-    # SQLMap's default output directory naming is quite robust, but explicit is better.
+    # Create a unique output directory for each URL/request to avoid conflicts for sqlmap
     parsed_url_netloc = urlparse(url).netloc.replace('.', '_').replace(':', '_')
-    url_hash = str(abs(hash(url)))[:8] # Simple hash for unique folder name
+    url_hash = str(abs(hash(url + method + str(body_params))))[:8] # More robust hash
     sqlmap_output_path = os.path.join(output_dir, f"sqlmap_{parsed_url_netloc}_{url_hash}")
     os.makedirs(sqlmap_output_path, exist_ok=True)
 
-    sqlmap_command = (
-        f"sqlmap -u \"{url}\" --batch --risk=3 --level=3 "
-        f"--crawl=3 --forms --output-dir=\"{sqlmap_output_path}\" "
-        f"--parse-errors" # Helps identify potential SQL errors even if no direct injection
-    )
+    sqlmap_command_parts = [
+        "sqlmap",
+        f"--output-dir=\"{sqlmap_output_path}\"",
+        "--batch",
+        "--risk=3", # Medium risk, can be adjusted
+        "--level=3", # Medium level, can be adjusted
+        "--parse-errors", # Helps identify potential SQL errors
+        "--skip-waf" # Attempt to bypass WAF/IDS
+    ]
+
+    temp_req_file_path = None
+
+    if method == "GET":
+        sqlmap_command_parts.append(f"-u \"{url}\"")
+        if headers:
+            # sqlmap accepts headers with --headers. Format: "Header1: Val1,Header2: Val2"
+            header_str = ",".join([f"{k}: {v}" for k, v in headers.items()])
+            sqlmap_command_parts.append(f"--headers=\"{header_str}\"")
+    else: # POST, PUT, DELETE, PATCH
+        # For non-GET requests, it's generally best to use --data or --req
+        # If body_params are present, we construct --data or a --req file.
+        # SQLMap can handle JSON or form-urlencoded via --data if Content-Type is set.
+        # For complex scenarios or if headers are crucial for the body, --req is better.
+
+        # Let's use --data if it's simple form/json or create a --req file otherwise.
+        
+        # Check if body_params is a dictionary, convert from string if needed
+        if isinstance(body_params, str):
+            try:
+                body_params = json.loads(body_params)
+            except json.JSONDecodeError:
+                # If not JSON, assume it's URL-encoded form data string and parse it.
+                body_params = parse_qs(body_params)
+        
+        if body_params:
+            content_type = headers.get("Content-Type", "").lower()
+            if "application/json" in content_type:
+                data_string = json.dumps(body_params)
+                sqlmap_command_parts.append(f"--data=\"{data_string}\"")
+                sqlmap_command_parts.append("--json-req") # Inform sqlmap it's a JSON request
+            elif "application/x-www-form-urlencoded" in content_type or not content_type: # Default to form-urlencoded
+                data_string = urlencode(body_params)
+                sqlmap_command_parts.append(f"--data=\"{data_string}\"")
+            else:
+                # Fallback to --req file for other content types or complex structures
+                temp_req_filename = f"sqlmap_req_{abs(hash(url))}_{method}.txt"
+                temp_req_file_path = os.path.join(sqlmap_output_path, temp_req_filename)
+                
+                with open(temp_req_file_path, "w") as f:
+                    # Write request line (path and query)
+                    parsed_url = urlparse(url)
+                    path_with_query = f"{parsed_url.path}"
+                    if parsed_url.query:
+                        path_with_query += f"?{parsed_url.query}"
+                    f.write(f"{method} {path_with_query} HTTP/1.1\n")
+                    f.write(f"Host: {parsed_url.netloc}\n")
+                    for header_key, header_value in headers.items():
+                        f.write(f"{header_key}: {header_value}\n")
+                    f.write("\n") # End of headers
+                    if isinstance(body_params, dict):
+                        f.write(json.dumps(body_params) if "application/json" in content_type else urlencode(body_params))
+                    else:
+                        f.write(str(body_params)) # Write raw body if not dict
+                sqlmap_command_parts.append(f"--req=\"{temp_req_file_path}\"")
+
+        sqlmap_command_parts.append(f"-u \"{url}\"") # URL must still be provided with --req
+        sqlmap_command_parts.append(f"--method=\"{method}\"")
+        if headers:
+            header_str = ",".join([f"{k}: {v}" for k, v in headers.items()])
+            sqlmap_command_parts.append(f"--headers=\"{header_str}\"")
     
-    # Redirecting stdout to a file to capture verbose output that might contain findings
+    sqlmap_command = " ".join(sqlmap_command_parts)
+    
     sqlmap_log_file = os.path.join(sqlmap_output_path, "sqlmap_log.txt")
     sqlmap_error_log_file = os.path.join(sqlmap_output_path, "sqlmap_error.txt")
 
     try:
-        # sqlmap doesn't always exit with 0 on "no vulnerability", so check=True isn't always good.
-        # Instead, we will check the captured output.
         process = subprocess.run(sqlmap_command, shell=True, capture_output=True, text=True)
         stdout = process.stdout
         stderr = process.stderr
 
-        # Write outputs to files for debugging/review if needed
         with open(sqlmap_log_file, "w") as f:
             f.write(stdout)
         with open(sqlmap_error_log_file, "w") as f:
             f.write(stderr)
 
         if "is vulnerable" in stdout.lower() or "vulnerable" in stdout.lower() or "found" in stdout.lower():
-            # Parse sqlmap's stdout for vulnerability details
-            # This parsing is heuristic and might need refinement based on actual sqlmap output.
             vulnerability_type = "SQL Injection"
-            severity = "high" # Default severity
+            severity = "high"
             
-            # Try to extract details from stdout
             details_match = re.search(r"the parameter '(.+?)' is vulnerable\.(.*?)(?:\n\n|\Z)", stdout, re.DOTALL | re.IGNORECASE)
             parameter = details_match.group(1).strip() if details_match else "N/A"
             tech_match = re.search(r"It is injectable with the following(.*?)techniques: (.*?)(?:\n|$)", stdout, re.DOTALL | re.IGNORECASE)
@@ -100,10 +149,12 @@ def run_sqlmap(url, output_dir, session, scan_id):
                 "vulnerability": vulnerability_type,
                 "severity": severity,
                 "url": url,
+                "method": method,
                 "tool": "SQLMap",
                 "parameter": parameter,
                 "technique": technique,
-                "sqlmap_stdout_summary": stdout[:1000] # Store a snippet of stdout
+                "sqlmap_stdout_summary": stdout[:1000],
+                "description": f"SQL Injection detected by SQLMap on parameter '{parameter}' using {method} request. Techniques: {technique}. See sqlmap_log.txt for full details."
             }
 
             try:
@@ -116,7 +167,7 @@ def run_sqlmap(url, output_dir, session, scan_id):
                 )
                 session.add(new_vulnerability)
                 session.commit()
-                print(f"{GREEN}   [+] SQL Injection vulnerability stored for: {url}{NC}")
+                print(f"{GREEN}   [+] SQL Injection vulnerability stored for: {url} ({method}){NC}")
             except IntegrityError:
                 session.rollback()
                 logger.info(f"Duplicate SQL Injection vulnerability found and skipped for URL: {url}")
@@ -124,64 +175,64 @@ def run_sqlmap(url, output_dir, session, scan_id):
                 session.rollback()
                 logger.error(f"Error saving SQL Injection vulnerability to DB: {db_e}")
         else:
-            print(f"{YELLOW}   [!] No SQL Injection vulnerability detected by SQLMap for: {url}{NC}")
+            print(f"{YELLOW}   [!] No SQL Injection vulnerability detected by SQLMap for: {url} ({method}){NC}")
 
     except Exception as e:
-        print(f"{RED}An unexpected error occurred during SQLMap execution or processing for {url}: {e}{NC}")
+        print(f"{RED}An unexpected error occurred during SQLMap execution or processing for {url} ({method}): {e}{NC}")
     finally:
-        # Clean up sqlmap's verbose output directory if no findings or on error.
-        # However, sqlmap might create sub-directories (like `output/target_domain/`),
-        # so simple os.rmdir won't work. For robust cleanup, `shutil.rmtree` is needed.
-        # For now, leaving the directory for manual inspection if needed.
-        # Or, can add: import shutil; shutil.rmtree(sqlmap_output_path)
-        pass 
-    print(f"{GREEN}[+] SQLMap scan for {url} completed.{NC}")
+        if temp_req_file_path and os.path.exists(temp_req_file_path):
+            os.remove(temp_req_file_path)
+    print(f"{GREEN}[+] SQLMap scan for {url} ({method}) completed.{NC}")
 
 # Main SQL Injection function
 def sql_injection_test(urls_file_path, output_dir, headers=None, thread_count=1, delay=1, session=None, scan_id=None):
     """
-    Performs SQL Injection testing on URLs from a given file using SQLMap.
+    Performs SQL Injection testing on endpoints from the database using SQLMap.
     Results are stored in the database.
     """
     print(f"{YELLOW}[+] Starting SQL Injection scan...{NC}")
     
-    urls = read_urls_from_file(urls_file_path)
-    if not urls:
-        print(f"{RED}[!] No URLs found to test for SQL Injection.{NC}")
+    if session is None or scan_id is None:
+        print(f"{RED}[!] Database session or scan_id not provided. Cannot perform SQL Injection scan.{NC}")
         return
 
-    # Using ThreadPoolExecutor for concurrent SQLMap scans
-    # sqlmap itself can handle concurrency, but if we call it per URL, Python threads help.
-    # However, running multiple sqlmap instances concurrently might be resource intensive.
-    # Limiting threads to a reasonable number.
+    # Fetch endpoints from the database for the current scan
+    endpoints_to_test = session.query(Endpoint).filter_by(scan_id=scan_id).all()
+
+    if not endpoints_to_test:
+        print(f"{RED}[!] No endpoints found in the database for scan_id {scan_id} to test for SQL Injection.{NC}")
+        return
+
     max_workers = int(thread_count) if thread_count and int(thread_count) > 0 else 1
     
-    with threading.Semaphore(max_workers): # Use semaphore to limit active threads
+    with threading.Semaphore(max_workers):
         threads = []
-        for url in urls:
-            # Create a new thread for each URL
-            t = threading.Thread(target=run_sqlmap, args=(url, output_dir, session, scan_id))
+        for endpoint in endpoints_to_test:
+            endpoint_data = {
+                "url": endpoint.url,
+                "method": endpoint.method,
+                "body_params": json.loads(endpoint.body_params) if isinstance(endpoint.body_params, str) and endpoint.body_params else {},
+                "extra_headers": json.loads(endpoint.extra_headers) if isinstance(endpoint.extra_headers, str) and endpoint.extra_headers else {}
+            }
+            
+            t = threading.Thread(target=run_sqlmap, args=(endpoint_data, output_dir, session, scan_id))
             threads.append(t)
             t.start()
             if delay > 0:
-                time.sleep(delay) # Optional delay between starting threads
+                time.sleep(delay)
 
         for t in threads:
-            t.join() # Wait for all threads to complete
+            t.join()
 
     print(f"{GREEN}[+] SQL Injection scan completed. Results stored in database.{NC}")
 
 # This part is for direct testing of the module
 if __name__ == "__main__":
-    # This is for testing purposes only. In production, this is called from VulnScanX.py.
-    # You would need to set up a dummy session and scan_id for testing.
-    from tools.database import init_db, get_session, Base, ScanHistory # For local testing
+    from tools.database import init_db, get_session, Base, ScanHistory, Endpoint # For local testing
 
-    # Initialize a temporary database for testing
     temp_db_engine = init_db('sqlite:///test_sqlinjection.db')
     test_session = get_session(temp_db_engine)
     
-    # Create a dummy ScanHistory record for testing
     test_domain = "test-sqli-target.com"
     test_scan = test_session.query(ScanHistory).filter_by(domain=test_domain).first()
     if not test_scan:
@@ -192,15 +243,33 @@ if __name__ == "__main__":
 
     dummy_output_dir = "test_sqli_output"
     os.makedirs(dummy_output_dir, exist_ok=True)
-    dummy_urls_file = os.path.join(dummy_output_dir, "dummy_urls_sqli.txt")
     
-    # Create a dummy urls.txt file for testing (example vulnerable URLs)
-    with open(dummy_urls_file, "w") as f:
-        f.write("http://testphp.vulnweb.com/listproducts.php?cat=1\n") # Known vulnerable URL
-        f.write("http://example.com/search?q=test\n") # Benign URL
+    # Add dummy endpoints to the database for testing GET/POST with SQLi
+    dummy_endpoints_data = [
+        {"url": "http://testphp.vulnweb.com/listproducts.php?cat=1", "method": "GET", "body_params": {}, "extra_headers": {}}, # Known vulnerable
+        {"url": "http://example.com/login", "method": "POST", "body_params": {"username": "admin", "password": "password"}, "extra_headers": {"Content-Type": "application/x-www-form-urlencoded"}},
+        {"url": "http://example.com/api/user/profile", "method": "PUT", "body_params": {"id": 1, "name": "test"}, "extra_headers": {"Content-Type": "application/json"}},
+    ]
+    for ep_data in dummy_endpoints_data:
+        try:
+            new_endpoint = Endpoint(
+                scan_id=test_scan_id,
+                url=ep_data["url"],
+                method=ep_data["method"],
+                body_params=json.dumps(ep_data["body_params"]),
+                extra_headers=json.dumps(ep_data["extra_headers"])
+            )
+            test_session.add(new_endpoint)
+            test_session.commit()
+        except IntegrityError:
+            test_session.rollback()
+            logger.info(f"Duplicate endpoint added for testing: {ep_data['url']}")
+        except Exception as db_e:
+            test_session.rollback()
+            logger.error(f"Error adding dummy endpoint to DB: {db_e}")
 
     print(f"{BLUE}[+] Running SQL Injection test with sqlmap integration...{NC}")
-    sql_injection_test(dummy_urls_file, dummy_output_dir, session=test_session, scan_id=test_scan_id)
+    sql_injection_test("dummy_file_path", dummy_output_dir, session=test_session, scan_id=test_scan_id)
     
     print(f"{BLUE}[+] Verifying results from database...{NC}")
     retrieved_vulns = test_session.query(Vulnerability).filter_by(scan_id=test_scan_id).all()
@@ -210,21 +279,14 @@ if __name__ == "__main__":
 
     test_session.close()
     
-    # Clean up test files and directory
-    if os.path.exists(dummy_urls_file):
-        os.remove(dummy_urls_file)
+    import shutil
+    if os.path.exists(dummy_output_dir):
+        try:
+            shutil.rmtree(dummy_output_dir)
+            print(f"{GREEN}[+] Cleaned up directory: {dummy_output_dir}{NC}")
+        except OSError as e:
+            print(f"{RED}Error removing directory {dummy_output_dir}: {e}{NC}")
     
-    # SQLMap creates complex directory structures. For robust cleanup, shutil.rmtree is needed.
-    # import shutil
-    # if os.path.exists(dummy_output_dir):
-    #     try:
-    #         shutil.rmtree(dummy_output_dir)
-    #         print(f"{GREEN}[+] Cleaned up directory: {dummy_output_dir}{NC}")
-    #     except OSError as e:
-    #         print(f"{RED}Error removing directory {dummy_output_dir}: {e}{NC}")
-    print(f"{YELLOW}[!] Please manually clean up SQLMap output directory: {dummy_output_dir}{NC}")
-
-    # Clean up test database file
     if os.path.exists('test_sqlinjection.db'):
         os.remove('test_sqlinjection.db')
 

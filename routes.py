@@ -138,6 +138,7 @@ def start_scan_api():
 
         url = data.get("url")
         headers = data.get("headers", {})
+        headers2 = data.get("headers2", {})
         scan_type = data.get("scan_type")
         client_sid = data.get("sid")
 
@@ -154,6 +155,7 @@ def start_scan_api():
         commandinj = data.get("command_injection", "off")
         idor_scan = data.get("idor", "off")
         csrf_scan = data.get("csrf", "off")
+        bac_scan = data.get("bac", "off")
         
         if not url:
             return jsonify({"error": "Validation Error", "details": "URL is required."}), 400
@@ -195,7 +197,7 @@ def start_scan_api():
                     db_session_factory, progress_emitter, vulnerability_emitter,
                     num_threads_global, sio,
                     True, True, open_browser, True, True, wordlist_path,
-                    login_event
+                    login_event, headers2
                 )
             )
         elif scan_type == "custom":
@@ -206,7 +208,7 @@ def start_scan_api():
                     url_directory, scan_id, client_sid, db_session_factory, progress_emitter,
                     vulnerability_emitter, num_threads_global, sio,
                     passive_crawl, active_crawl, open_browser, passive_subdomain, active_subdomain, wordlist_path,
-                    login_event
+                    login_event, headers2, bac_scan
                 )
             )
         

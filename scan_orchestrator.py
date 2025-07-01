@@ -1,7 +1,7 @@
 import json
 import os
 from tools.database import Endpoint
-from tools import commandinjection, dalfox, sqlinjection, autorecon, idor, csrf # Import all scan tools
+from tools import commandinjection, dalfox, sqlinjection, autorecon, idor, csrf, bac # Import all scan tools, including bac
 
 # These functions will be called by routes.py in separate threads
 # They need access to a Session factory, and the emitter functions from the main app.
@@ -9,13 +9,13 @@ from tools import commandinjection, dalfox, sqlinjection, autorecon, idor, csrf 
 def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, progress_emitter, vulnerability_emitter, num_threads_global, sio_instance,
               passive_crawl_enabled=False, active_crawl_enabled=False, open_browser_for_active_crawl=False,
               passive_subdomain_enabled=False, active_subdomain_enabled=False, wordlist_path=None,
-              login_event=None): # ADDED login_event
+              login_event=None, headers2=None): # ADDED headers2
     """
     Performs a full security scan on a target URL.
 
     Args:
         url (str): The target URL.
-        headers (dict): Custom HTTP headers.
+        headers (dict): Custom HTTP headers for user 1.
         url_directory (str): Directory for scan results.
         scan_id (int): The ID of the current scan.
         sid (str): Socket ID for progress updates.
@@ -31,18 +31,20 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
         active_subdomain_enabled (bool): Enable active subdomain enumeration.
         wordlist_path (str, optional): Path to the wordlist for active enumeration tools.
         login_event (threading.Event, optional): Event to signal completion of manual login.
+        headers2 (dict, optional): Custom HTTP headers for user 2 (for multi-user tests like IDOR, CSRF, BAC).
     """
     current_session = db_session_factory()
     temp_endpoints_file_path = os.path.join(url_directory, "temp_endpoints_for_tools.txt")
 
     # Define scan steps and their approximate weights for progress calculation
     scan_steps = [
-        ("Reconnaissance", 20),
-        ("XSS Scan", 15),
-        ("Command Injection", 15),
-        ("SQL Injection", 15),
-        ("IDOR Scan", 15),
-        ("CSRF Scan", 15),
+        ("Reconnaissance", 15), # Reduced weight slightly to accommodate BAC
+        ("XSS Scan", 10),
+        ("Command Injection", 10),
+        ("SQL Injection", 10),
+        ("IDOR Scan", 10),
+        ("CSRF Scan", 10),
+        ("Broken Access Control Scan", 15), # Added BAC scan
         ("Cleanup", 5)
     ]
     total_weight = sum(weight for _, weight in scan_steps)
@@ -73,15 +75,15 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
             passive_subdomain_enabled=passive_subdomain_enabled,
             active_subdomain_enabled=active_subdomain_enabled,
             wordlist_path=wordlist_path,
-            login_event=login_event # PASSED login_event
+            login_event=login_event
         )
         current_weight += step_weight
         emit_progress_internal(f'{step_name} complete. Retrieving endpoints...', 'info')
 
         # Retrieve endpoints from DB for subsequent scans
+        # Not strictly needed if tools fetch directly from DB, but kept for consistency/file-based tools
         endpoints_urls = [e.url for e in current_session.query(Endpoint).filter_by(scan_id=scan_id).all()]
         
-        # Create a temporary file of endpoints for tools that expect it.
         with open(temp_endpoints_file_path, "w") as f:
             for ep_url in endpoints_urls:
                 f.write(ep_url + "\n")
@@ -109,12 +111,21 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
 
         step_name, step_weight = scan_steps[5]
         emit_progress_internal(f'Running {step_name}...', 'info')
-        csrf.csrf(temp_endpoints_file_path, session=current_session, scan_id=scan_id)
+        csrf.csrf(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2) # Pass headers1 and headers2
+        current_weight += step_weight
+
+        step_name, step_weight = scan_steps[6] # New BAC step
+        emit_progress_internal(f'Running {step_name}...', 'info')
+        # BAC scan requires headers for two users for session comparison
+        if headers and headers2:
+            bac.bac_scan(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2, max_workers=num_threads_global)
+        else:
+            emit_progress_internal(f'Skipping {step_name}: Both headers1 and headers2 are required for Broken Access Control scan.', 'warning')
         current_weight += step_weight
 
         current_session.commit()
         
-        step_name, step_weight = scan_steps[6]
+        step_name, step_weight = scan_steps[7]
         emit_progress_internal(f'Starting {step_name}...', 'info')
         # Cleanup temporary files and directories
         if os.path.exists(temp_endpoints_file_path):
@@ -144,13 +155,13 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
 def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_scan, url_directory, scan_id, sid, db_session_factory, progress_emitter, vulnerability_emitter, num_threads_global, sio_instance,
                 passive_crawl_enabled=False, active_crawl_enabled=False, open_browser_for_active_crawl=False,
                 passive_subdomain_enabled=False, active_subdomain_enabled=False, wordlist_path=None,
-                login_event=None): # ADDED login_event
+                login_event=None, headers2=None, bac_scan_enabled="off"): # ADDED headers2, bac_scan_enabled
     """
     Performs a custom security scan on a target URL based on selected options.
 
     Args:
         url (str): The target URL.
-        headers (dict): Custom HTTP headers.
+        headers (dict): Custom HTTP headers for user 1.
         crawling (str): 'on' or 'off' for general endpoint discovery.
         xss (str): 'on' or 'off' for XSS scan.
         sqli (str): 'on' or 'off' for SQL Injection scan.
@@ -172,17 +183,19 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
         active_subdomain_enabled (bool): Enable active subdomain enumeration.
         wordlist_path (str, optional): Path to the wordlist for active enumeration tools.
         login_event (threading.Event, optional): Event to signal completion of manual login.
+        headers2 (dict, optional): Custom HTTP headers for user 2 (for multi-user tests like IDOR, CSRF, BAC).
+        bac_scan_enabled (str): 'on' or 'off' for Broken Access Control scan.
     """
     current_session = db_session_factory()
     temp_endpoints_file_path = os.path.join(url_directory, "temp_endpoints_for_tools.txt")
 
     # Define scan steps and their approximate weights for progress calculation
     scan_steps = []
-    # Adjust condition for Reconnaissance step
+    
     if crawling == "on" or passive_subdomain_enabled or active_subdomain_enabled or passive_crawl_enabled or active_crawl_enabled:
         scan_steps.append(("Reconnaissance", 20))
     else:
-        scan_steps.append(("Initial Setup", 5)) # For adding URL as endpoint
+        scan_steps.append(("Initial Setup", 5))
 
     if xss == "on":
         scan_steps.append(("XSS Scan", 15))
@@ -194,8 +207,10 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
         scan_steps.append(("IDOR Scan", 15))
     if csrf_scan == "on":
         scan_steps.append(("CSRF Scan", 15))
+    if bac_scan_enabled == "on": # Added BAC scan to custom
+        scan_steps.append(("Broken Access Control Scan", 15))
     
-    scan_steps.append(("Cleanup", 5)) # Always include cleanup
+    scan_steps.append(("Cleanup", 5))
 
     total_weight = sum(weight for _, weight in scan_steps)
     current_weight = 0
@@ -209,13 +224,10 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
     try:
         emit_progress_internal(f'Starting custom scan for {url}...', 'info')
         
-        # Ensure headers is a dictionary, even if empty or None from frontend
         headers = headers if isinstance(headers, dict) else {}
 
-        # Determine endpoints to work with
-        # Adjust condition for Reconnaissance execution
         if crawling == "on" or passive_subdomain_enabled or active_subdomain_enabled or passive_crawl_enabled or active_crawl_enabled:
-            step_name, step_weight = scan_steps[0] # Reconnaissance
+            step_name, step_weight = scan_steps[0]
             emit_progress_internal(f'Starting {step_name}...', 'info')
             autorecon.autorecon(
                 url=url,
@@ -229,48 +241,40 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
                 passive_subdomain_enabled=passive_subdomain_enabled,
                 active_subdomain_enabled=active_subdomain_enabled,
                 wordlist_path=wordlist_path,
-                login_event=login_event # PASSED login_event
+                login_event=login_event
             )
             current_weight += step_weight
             emit_progress_internal(f'{step_name} complete. Retrieving endpoints...', 'info')
             endpoints_urls = [e.url for e in current_session.query(Endpoint).filter_by(scan_id=scan_id).all()]
         else:
-            # If no recon, explicitly add the target URL as an endpoint to the database
-            step_name, step_weight = scan_steps[0] # Initial Setup
+            step_name, step_weight = scan_steps[0]
             emit_progress_internal(f'Starting {step_name}. Adding URL as endpoint.', 'info')
             
-            # Decide the method for the initial URL. If CSRF is on, default to POST for testing purposes.
-            # Otherwise, default to GET.
             initial_url_method = "POST" if csrf_scan == "on" else "GET"
 
-            # Check if the URL already exists as an endpoint for this scan to prevent duplicates
             existing_endpoint = current_session.query(Endpoint).filter_by(scan_id=scan_id, url=url, method=initial_url_method).first()
             if not existing_endpoint:
                 new_endpoint = Endpoint(
                     scan_id=scan_id,
                     url=url,
                     method=initial_url_method,
-                    body_params=json.dumps({}), # Always initialize as an empty dict
-                    extra_headers=json.dumps(headers) # This 'headers' is now guaranteed to be a dict
+                    body_params=json.dumps({}),
+                    extra_headers=json.dumps(headers)
                 )
                 current_session.add(new_endpoint)
-                current_session.commit() # Commit to make it immediately available for other queries
+                current_session.commit()
                 emit_progress_internal(f'Added {url} as a {initial_url_method} endpoint.', 'info')
             else:
                 emit_progress_internal(f'{url} already exists as a {initial_url_method} endpoint.', 'info')
 
-            endpoints_urls = [url] # Ensure it's in the list for file-based tools
+            endpoints_urls = [url]
             current_weight += step_weight
 
-
-        # Write to a temporary file for tools that still expect file input
         with open(temp_endpoints_file_path, "w") as f:
             for ep_url in endpoints_urls:
                 f.write(ep_url + "\n")
 
-        # Phase 2: Run the selected functions with progress updates
-        # The step_index needs to correctly point to the next step after either Reconnaissance or Initial Setup
-        step_index_offset = 1 # Start from the second step in scan_steps list
+        step_index_offset = 1
         
         if xss == "on":
             step_name, step_weight = scan_steps[step_index_offset]
@@ -303,14 +307,23 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
         if csrf_scan == "on":
             step_name, step_weight = scan_steps[step_index_offset]
             emit_progress_internal(f'Running {step_name}...', 'info')
-            csrf.csrf(temp_endpoints_file_path, session=current_session, scan_id=scan_id)
+            csrf.csrf(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2) # Pass headers1 and headers2
+            current_weight += step_weight
+            step_index_offset += 1
+
+        if bac_scan_enabled == "on": # New BAC step in custom scan
+            step_name, step_weight = scan_steps[step_index_offset]
+            emit_progress_internal(f'Running {step_name}...', 'info')
+            if headers and headers2:
+                bac.bac_scan(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2, max_workers=num_threads_global)
+            else:
+                emit_progress_internal(f'Skipping {step_name}: Both headers1 and headers2 are required for Broken Access Control scan.', 'warning')
             current_weight += step_weight
             step_index_offset += 1
 
         current_session.commit()
         
-        # Final cleanup step
-        step_name, step_weight = scan_steps[step_index_offset] # This should be "Cleanup"
+        step_name, step_weight = scan_steps[step_index_offset]
         emit_progress_internal(f'Starting {step_name}...', 'info')
         if os.path.exists(temp_endpoints_file_path):
             os.remove(temp_endpoints_file_path)
@@ -321,7 +334,7 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
                 emit_progress_internal(f'Cleaned up: {url_directory}', 'info')
             except OSError as e:
                 emit_progress_internal(f'Error cleaning {url_directory}: {e}', 'error')
-        current_weight += step_weight # Ensure cleanup weight is added
+        current_weight += step_weight
 
         emit_progress_internal('Custom scan completed!', 'success')
         sio_instance.emit('scan_complete', {'scan_id': scan_id, 'message': 'Custom scan finished.', 'progress': 100}, room=sid)
