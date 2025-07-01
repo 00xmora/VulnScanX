@@ -132,6 +132,9 @@ def setup_domain_directory(project_path, domain):
     print(f"{BLUE}[+] Directory created: {project_path}/{safe_domain}{NC}")
     return target_path
 
+import shutil
+import platform
+
 def get_driver(headless=True):
     """
     Initialize a browser driver with fallback.
@@ -146,21 +149,33 @@ def get_driver(headless=True):
         chrome_options = ChromeOptions()
         chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
         if headless:
-            chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--no-sandbox") # Add for containerized environments
-            chrome_options.add_argument("--disable-dev-shm-usage") # Add for containerized environments
-        return webdriver.Chrome(options=chrome_options)
+            chrome_options.add_argument("--headless=new")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+
+        # Try to locate chromedriver
+        chromedriver_path = shutil.which("chromedriver")
+
+        # Manual fallback for Windows/Linux
+        if not chromedriver_path:
+            if platform.system() == "Windows":
+                chromedriver_path = "C:\\Program Files\\Google\\Chrome\\Application\\chromedriver.exe"
+            else:
+                chromedriver_path = "/usr/bin/chromedriver"
+
+        return webdriver.Chrome(executable_path=chromedriver_path, options=chrome_options)
+
     except Exception as e:
         logger.warning(f"Chrome WebDriver failed: {str(e)}. Falling back to Firefox.")
         try:
             firefox_options = FirefoxOptions()
-            firefox_options.set_capability("moz:firefoxOptions", {"prefs": {"devtools.console.stdout.content": True}})
             if headless:
                 firefox_options.add_argument("--headless")
             return webdriver.Firefox(options=firefox_options)
         except Exception as e:
             logger.error(f"Firefox WebDriver failed: {str(e)}. No browser available.")
             raise Exception("No supported browser WebDriver found.")
+
 
 def is_valid_url(url, base_domain):
     """
