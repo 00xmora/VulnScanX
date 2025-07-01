@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select
@@ -20,7 +22,8 @@ import configparser
 import logging
 from sqlalchemy.exc import IntegrityError
 from tools.database import ReconResult, Endpoint # Import new models
-import threading # ADDED import for threading.Event
+import shutil
+import platform
 
 # Define colors
 RED = '\033[0;31m'
@@ -132,18 +135,10 @@ def setup_domain_directory(project_path, domain):
     print(f"{BLUE}[+] Directory created: {project_path}/{safe_domain}{NC}")
     return target_path
 
-import shutil
-import platform
 
 def get_driver(headless=True):
     """
-    Initialize a browser driver with fallback.
-    Args:
-        headless (bool): If True, run browser in headless mode.
-    Returns:
-        webdriver.Chrome or webdriver.Firefox: The initialized WebDriver.
-    Raises:
-        Exception: If no supported browser WebDriver is found.
+    Initialize a browser driver with fallback (Selenium 4.x+ compatible).
     """
     try:
         chrome_options = ChromeOptions()
@@ -153,17 +148,16 @@ def get_driver(headless=True):
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
 
-        # Try to locate chromedriver
         chromedriver_path = shutil.which("chromedriver")
-
-        # Manual fallback for Windows/Linux
         if not chromedriver_path:
             if platform.system() == "Windows":
                 chromedriver_path = "C:\\Program Files\\Google\\Chrome\\Application\\chromedriver.exe"
             else:
                 chromedriver_path = "/usr/bin/chromedriver"
 
-        return webdriver.Chrome(executable_path=chromedriver_path, options=chrome_options)
+        service = ChromeService(executable_path=chromedriver_path)
+        print(f"[DEBUG] Using ChromeDriver at: {chromedriver_path}")
+        return webdriver.Chrome(service=service, options=chrome_options)
 
     except Exception as e:
         logger.warning(f"Chrome WebDriver failed: {str(e)}. Falling back to Firefox.")
@@ -171,10 +165,19 @@ def get_driver(headless=True):
             firefox_options = FirefoxOptions()
             if headless:
                 firefox_options.add_argument("--headless")
-            return webdriver.Firefox(options=firefox_options)
+
+            geckodriver_path = shutil.which("geckodriver")
+            if not geckodriver_path:
+                geckodriver_path = "/usr/bin/geckodriver"
+
+            service = FirefoxService(executable_path=geckodriver_path)
+            print(f"[DEBUG] Using GeckoDriver at: {geckodriver_path}")
+            return webdriver.Firefox(service=service, options=firefox_options)
+
         except Exception as e:
             logger.error(f"Firefox WebDriver failed: {str(e)}. No browser available.")
             raise Exception("No supported browser WebDriver found.")
+
 
 
 def is_valid_url(url, base_domain):
