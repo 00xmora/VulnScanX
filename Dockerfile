@@ -10,16 +10,19 @@ ENV PATH=$PATH:$GOROOT/bin:$HOME/go/bin
 # Install system dependencies:
 # - build-essential: For compiling Go and other tools
 # - wget, curl, git: For downloading and cloning
-# - chromium (and chromedriver): For Selenium active crawling
+# - fonts-liberation: Often needed for headless browser
+# - google-chrome-stable (and chromium-driver): For Selenium active crawling
+#   chromium-driver usually provides the `chromedriver` executable.
 # - sqlmap, commix, dnsutils (for dig): System packages for external tools
 # - jq: useful for JSON parsing
+# - gnupg, ca-certificates, software-properties-common: for adding repositories
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     build-essential \
     wget \
     curl \
     git \
-    chromium \
+    fonts-liberation \
     chromium-driver \
     sqlmap \
     commix \
@@ -28,6 +31,13 @@ RUN apt-get update && \
     gnupg \
     ca-certificates \
     software-properties-common && \
+    \
+    # Add Google Chrome repository
+    wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg && \
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | tee /etc/apt/sources.list.d/google-chrome.list && \
+    \
+    apt-get update && \
+    apt-get install -y --no-install-recommends google-chrome-stable && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Go

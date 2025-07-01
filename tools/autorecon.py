@@ -77,7 +77,7 @@ def print_banner():
     print(r" /_/    \_\__,_|\__\___/|_|  \_\___|\___\___/|_| |_|")
     print(f"{NC}")
     print(f"{YELLOW}{BOLD}By: omar samy{NC}")
-    print(f"{BLUE}{BOLD}Twitter: @omarsamy10{NC}")
+    print(f"{BLUE}{BOLD}Twitter: @00xmora{NC}")
     print("===================================================\n")
 
 def run_command(command, silent=False, output_file=None):

@@ -96,6 +96,123 @@ deactivate
 echo "Virtual environment deactivated for script execution. Remember to activate it manually for development: source $VENV_DIR/bin/activate"
 
 
+# --- Install Selenium WebDrivers (Chromedriver/Geckodriver) ---
+echo -e "\n[+] Installing Selenium WebDrivers..."
+# Detect OS and Architecture for WebDriver download
+UNAME_OS=$(uname -s | tr '[:upper:]' '[:lower__]')
+UNAME_ARCH=$(uname -m)
+
+# Try installing ChromeDriver first
+CHROME_VERSION=$(google-chrome --version 2>/dev/null | grep -oP '(?<=Google Chrome )\d+' || chromium --version 2>/dev/null | grep -oP '(?<=Chromium )\d+' || echo "")
+if [ -z "$CHROME_VERSION" ]; then
+    echo "  - Chrome/Chromium browser not found. Attempting to install it."
+    if command_exists apt-get; then
+        sudo apt-get update
+        sudo apt-get install -y chromium-browser || { echo "    WARNING: Failed to install chromium-browser. Active crawling might not work."; }
+        CHROME_VERSION=$(chromium --version 2>/dev/null | grep -oP '(?<=Chromium )\d+')
+    fi
+fi
+
+if [ -n "$CHROME_VERSION" ]; then
+    echo "  - Detected Chrome/Chromium version: ${CHROME_VERSION}"
+    # New ChromeDriver download logic after Chrome 115
+    # https://chromedriver.chromium.org/downloads/version-selection
+    LATEST_CHROMEDRIVER_VERSION_URL="https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_${CHROME_VERSION}"
+    DRIVER_VERSION=$(curl -s $LATEST_CHROMEDRIVER_VERSION_URL)
+    
+    if [ -n "$DRIVER_VERSION" ]; then
+        echo "  - Downloading ChromeDriver version: ${DRIVER_VERSION}"
+        if [ "$UNAME_OS" == "linux" ]; then
+            CHROMEDRIVER_URL="https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${DRIVER_VERSION}/linux64/chromedriver-linux64.zip"
+            ZIP_FILE="chromedriver-linux64.zip"
+            DRIVER_BIN="chromedriver-linux64/chromedriver"
+        elif [ "$UNAME_OS" == "darwin" ]; then
+            if [ "$UNAME_ARCH" == "x86_64" ]; then
+                CHROMEDRIVER_URL="https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${DRIVER_VERSION}/mac-x64/chromedriver-mac-x64.zip"
+                ZIP_FILE="chromedriver-mac-x64.zip"
+                DRIVER_BIN="chromedriver-mac-x64/chromedriver"
+            elif [ "$UNAME_ARCH" == "arm64" ]; then
+                CHROMEDRIVER_URL="https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${DRIVER_VERSION}/mac-arm64/chromedriver-mac-arm64.zip"
+                ZIP_FILE="chromedriver-mac-arm64.zip"
+                DRIVER_BIN="chromedriver-mac-arm64/chromedriver"
+            fi
+        elif [ "$UNAME_OS" == "windows" ]; then
+            CHROMEDRIVER_URL="https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/${DRIVER_VERSION}/win32/chromedriver-win32.zip"
+            ZIP_FILE="chromedriver-win32.zip"
+            DRIVER_BIN="chromedriver-win32/chromedriver.exe"
+        else
+            echo "    WARNING: Unsupported OS for ChromeDriver auto-download: ${UNAME_OS}. Please install ChromeDriver manually."
+            CHROMEDRIVER_URL=""
+        fi
+
+        if [ -n "$CHROMEDRIVER_URL" ]; then
+            wget -q --show-progress "$CHROMEDRIVER_URL" && \
+            unzip -o "$ZIP_FILE" && \
+            sudo mv "$DRIVER_BIN" /usr/local/bin/chromedriver && \
+            sudo chmod +x /usr/local/bin/chromedriver && \
+            rm -rf "$ZIP_FILE" $(dirname "$DRIVER_BIN") && \
+            echo "  - ChromeDriver installed to /usr/local/bin/chromedriver" || \
+            echo "    WARNING: Failed to install ChromeDriver. Please install it manually."
+        fi
+    else
+        echo "    WARNING: Could not determine latest ChromeDriver version for Chrome ${CHROME_VERSION}. Please install ChromeDriver manually."
+    fi
+else
+    echo "  - Chrome/Chromium not found. Skipping ChromeDriver installation."
+fi
+
+# Fallback to GeckoDriver if ChromeDriver couldn't be set up or preferred
+if ! command_exists chromedriver; then
+    echo "  - ChromeDriver not found or failed to install. Attempting to install GeckoDriver (for Firefox)..."
+    FIREFOX_VERSION=$(firefox --version 2>/dev/null | grep -oP '(?<=Mozilla Firefox )\d+' || echo "")
+    if [ -z "$FIREFOX_VERSION" ]; then
+        echo "    - Firefox browser not found. Attempting to install it."
+        if command_exists apt-get; then
+            sudo apt-get update
+            sudo apt-get install -y firefox || { echo "      WARNING: Failed to install firefox. Active crawling might not work."; }
+        fi
+    fi
+
+    if [ -n "$FIREFOX_VERSION" ]; then
+        echo "    - Detected Firefox version: ${FIREFOX_VERSION}. Downloading latest GeckoDriver."
+        if [ "$UNAME_OS" == "linux" ]; then
+            GECKODRIVER_URL=$(curl -s "https://api.github.com/repos/mozilla/geckodriver/releases/latest" | grep "browser_download_url.*linux64" | cut -d : -f 2,3 | tr -d \")
+            ZIP_FILE="geckodriver-v*-linux64.tar.gz"
+            DRIVER_BIN="geckodriver"
+        elif [ "$UNAME_OS" == "darwin" ]; then
+            if [ "$UNAME_ARCH" == "x86_64" ]; then
+                GECKODRIVER_URL=$(curl -s "https://api.github.com/repos/mozilla/geckodriver/releases/latest" | grep "browser_download_url.*macos" | grep "64.tar.gz" | cut -d : -f 2,3 | tr -d \")
+                ZIP_FILE="geckodriver-v*-macos.tar.gz"
+                DRIVER_BIN="geckodriver"
+            elif [ "$UNAME_ARCH" == "arm64" ]; then # Assuming new geckodriver releases support M-series macs
+                GECKODRIVER_URL=$(curl -s "https://api.github.com/repos/mozilla/geckodriver/releases/latest" | grep "browser_download_url.*macos-aarch64" | cut -d : -f 2,3 | tr -d \")
+                ZIP_FILE="geckodriver-v*-macos-aarch64.tar.gz"
+                DRIVER_BIN="geckodriver"
+            fi
+        elif [ "$UNAME_OS" == "windows" ]; then
+            GECKODRIVER_URL=$(curl -s "https://api.github.com/repos/mozilla/geckodriver/releases/latest" | grep "browser_download_url.*win64.zip" | cut -d : -f 2,3 | tr -d \")
+            ZIP_FILE="geckodriver-v*-win64.zip"
+            DRIVER_BIN="geckodriver.exe"
+        else
+            echo "      WARNING: Unsupported OS for GeckoDriver auto-download: ${UNAME_OS}. Please install GeckoDriver manually."
+            GECKODRIVER_URL=""
+        fi
+
+        if [ -n "$GECKODRIVER_URL" ]; then
+            wget -q --show-progress "$GECKODRIVER_URL" && \
+            tar -xzf "$ZIP_FILE" && \
+            sudo mv "$DRIVER_BIN" /usr/local/bin/geckodriver && \
+            sudo chmod +x /usr/local/bin/geckodriver && \
+            rm -rf "$ZIP_FILE" && \
+            echo "  - GeckoDriver installed to /usr/local/bin/geckodriver" || \
+            echo "    WARNING: Failed to install GeckoDriver. Please install it manually."
+        fi
+    else
+        echo "  - Firefox not found. Skipping GeckoDriver installation."
+    fi
+fi
+
+
 # --- Install External Tools (Go-based) ---
 echo -e "\n[+] Installing Go-based tools (DalFox, Amass, Subfinder, httpx, ffuf)..."
 
