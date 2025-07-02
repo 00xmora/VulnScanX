@@ -25,3 +25,13 @@ def gemini(prompt):
         return f"Error {response.status_code}: {response.text}"
     
 
+def clean_gemini_response(raw_text):
+    """
+    Removes markdown JSON code block wrappers like ```json ... ```
+    to ensure the string is valid JSON for parsing.
+    """
+    if raw_text.startswith("```json"):
+        raw_text = raw_text[len("```json"):].strip()
+    if raw_text.endswith("```"):
+        raw_text = raw_text[:-3].strip()
+    return raw_text

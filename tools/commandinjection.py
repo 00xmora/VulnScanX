@@ -6,9 +6,10 @@ import subprocess
 import threading
 import logging
 import json
-from urllib.parse import urlparse, urljoin, urlencode, parse_qs
+from urllib.parse import urlparse, urlencode, parse_qs
 from sqlalchemy.exc import IntegrityError
 from tools.database import Vulnerability, Endpoint # Import the Vulnerability and Endpoint models
+from tools.database import try_save_vulnerability
 
 # Define colors for console output
 RED = '\033[0;31m'
@@ -22,6 +23,10 @@ BOLD = '\033[1m'
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Global list to store vulnerabilities found during the scan
+# This will be used to report the total count at the end.
+found_vulnerabilities = []
 
 
 # Function to execute a command and capture output (for general use)
@@ -76,9 +81,8 @@ def test_simple_injection(endpoint_data, session, scan_id):
         for param_name, original_values in query_params.items():
             original_value = original_values[0] # Take the first value if multiple for same param
             for payload in injection_payloads:
-                test_value = f"{original_value}{payload}"
                 test_params = query_params.copy()
-                test_params[param_name] = test_value
+                test_params[param_name] = f"{original_value}{payload}"
                 
                 test_url = base_url_without_query + "?" + urlencode(test_params, doseq=True)
 
@@ -98,24 +102,9 @@ def test_simple_injection(endpoint_data, session, scan_id):
                             "evidence": evidence,
                             "description": f"Command injection detected via GET parameter '{param_name}' using payload '{payload}'. Evidence: {evidence}"
                         }
-                        try:
-                            new_vulnerability = Vulnerability(
-                                scan_id=scan_id,
-                                vulnerability_data=vuln_data,
-                                vulnerability_type=vuln_data["vulnerability"],
-                                severity=vuln_data["severity"],
-                                url=vuln_data["url"]
-                            )
-                            session.add(new_vulnerability)
-                            session.commit()
-                            print(f"{GREEN}   [+] Command Injection (Simple) found at: {test_url} with payload '{payload}'{NC}")
-                            return # Found one, move to next endpoint
-                        except IntegrityError:
-                            session.rollback()
-                            logger.info(f"Duplicate Command Injection (Simple) vulnerability found and skipped for URL: {test_url}")
-                        except Exception as db_e:
-                            session.rollback()
-                            logger.error(f"Error saving Command Injection (Simple) vulnerability to DB: {db_e}")
+                        try_save_vulnerability(vuln_data, session, scan_id)
+                        print(f"{GREEN}   [+] Command Injection (Simple) found at: {test_url} with payload '{payload}'{NC}")
+                        return # Found one, move to next endpoint
                 except requests.exceptions.RequestException as e:
                     logger.debug(f"Request failed for {test_url}: {e}")
                 except Exception as e:
@@ -156,24 +145,9 @@ def test_simple_injection(endpoint_data, session, scan_id):
                             "evidence": evidence,
                             "description": f"Command injection detected via {method} body parameter '{param_name}' using payload '{payload}'. Evidence: {evidence}"
                         }
-                        try:
-                            new_vulnerability = Vulnerability(
-                                scan_id=scan_id,
-                                vulnerability_data=vuln_data,
-                                vulnerability_type=vuln_data["vulnerability"],
-                                severity=vuln_data["severity"],
-                                url=vuln_data["url"]
-                            )
-                            session.add(new_vulnerability)
-                            session.commit()
-                            print(f"{GREEN}   [+] Command Injection (Simple) found at: {url} ({method}) with payload '{payload}'{NC}")
-                            return # Found one, move to next endpoint
-                        except IntegrityError:
-                            session.rollback()
-                            logger.info(f"Duplicate Command Injection (Simple) vulnerability found and skipped for URL: {url}")
-                        except Exception as db_e:
-                            session.rollback()
-                            logger.error(f"Error saving Command Injection (Simple) vulnerability to DB: {db_e}")
+                        try_save_vulnerability(vuln_data, session, scan_id)
+                        print(f"{GREEN}   [+] Command Injection (Simple) found at: {url} ({method}) with payload '{payload}'{NC}")
+                        return # Found one, move to next endpoint
                 except requests.exceptions.RequestException as e:
                     logger.debug(f"Request failed for {url} ({method}): {e}")
                 except Exception as e:
@@ -209,9 +183,8 @@ def test_time_based_injection(endpoint_data, session, scan_id):
         for param_name, original_values in query_params.items():
             original_value = original_values[0]
             for payload in sleep_payloads:
-                test_value = f"{original_value}{payload}"
                 test_params = query_params.copy()
-                test_params[param_name] = test_value
+                test_params[param_name] = f"{original_value}{payload}"
                 
                 test_url = base_url_without_query + "?" + urlencode(test_params, doseq=True)
 
@@ -232,24 +205,9 @@ def test_time_based_injection(endpoint_data, session, scan_id):
                             "delay_detected_seconds": f"{elapsed_time:.2f}",
                             "description": f"Time-based command injection detected via GET parameter '{param_name}' using payload '{payload}'. Response delayed by {elapsed_time:.2f}s."
                         }
-                        try:
-                            new_vulnerability = Vulnerability(
-                                scan_id=scan_id,
-                                vulnerability_data=vuln_data,
-                                vulnerability_type=vuln_data["vulnerability"],
-                                severity=vuln_data["severity"],
-                                url=vuln_data["url"]
-                            )
-                            session.add(new_vulnerability)
-                            session.commit()
-                            print(f"{GREEN}   [+] Command Injection (Time-Based) found at: {test_url} with payload '{payload}' (Delay: {elapsed_time:.2f}s){NC}")
-                            return # Found one, move to next endpoint
-                        except IntegrityError:
-                            session.rollback()
-                            logger.info(f"Duplicate Command Injection (Time-Based) vulnerability found and skipped for URL: {test_url}")
-                        except Exception as db_e:
-                            session.rollback()
-                            logger.error(f"Error saving Command Injection (Time-Based) vulnerability to DB: {db_e}")
+                        try_save_vulnerability(vuln_data, session, scan_id)
+                        print(f"{GREEN}   [+] Command Injection (Time-Based) found at: {test_url} with payload '{payload}' (Delay: {elapsed_time:.2f}s){NC}")
+                        return # Found one, move to next endpoint
                 except requests.exceptions.Timeout:
                     end_time = time.time()
                     elapsed_time = end_time - start_time
@@ -264,24 +222,9 @@ def test_time_based_injection(endpoint_data, session, scan_id):
                             "delay_detected_seconds": f"{elapsed_time:.2f}",
                             "description": f"Time-based command injection detected (timeout) via GET parameter '{param_name}' using payload '{payload}'. Response delayed by {elapsed_time:.2f}s."
                         }
-                        try:
-                            new_vulnerability = Vulnerability(
-                                scan_id=scan_id,
-                                vulnerability_data=vuln_data,
-                                vulnerability_type=vuln_data["vulnerability"],
-                                severity=vuln_data["severity"],
-                                url=vuln_data["url"]
-                            )
-                            session.add(new_vulnerability)
-                            session.commit()
-                            print(f"{GREEN}   [+] Command Injection (Time-Based - Timeout) found at: {test_url} with payload '{payload}' (Delay: {elapsed_time:.2f}s){NC}")
-                            return
-                        except IntegrityError:
-                            session.rollback()
-                            logger.info(f"Duplicate Command Injection (Time-Based - Timeout) vulnerability found and skipped for URL: {test_url}")
-                        except Exception as db_e:
-                            session.rollback()
-                            logger.error(f"Error saving Command Injection (Time-Based - Timeout) vulnerability to DB: {db_e}")
+                        try_save_vulnerability(vuln_data, session, scan_id)
+                        print(f"{GREEN}   [+] Command Injection (Time-Based - Timeout) found at: {test_url} with payload '{payload}' (Delay: {elapsed_time:.2f}s){NC}")
+                        return
                 except requests.exceptions.RequestException as e:
                     logger.debug(f"Request failed for {test_url}: {e}")
                 except Exception as e:
@@ -322,24 +265,9 @@ def test_time_based_injection(endpoint_data, session, scan_id):
                             "delay_detected_seconds": f"{elapsed_time:.2f}",
                             "description": f"Time-based command injection detected via {method} body parameter '{param_name}' using payload '{payload}'. Response delayed by {elapsed_time:.2f}s."
                         }
-                        try:
-                            new_vulnerability = Vulnerability(
-                                scan_id=scan_id,
-                                vulnerability_data=vuln_data,
-                                vulnerability_type=vuln_data["vulnerability"],
-                                severity=vuln_data["severity"],
-                                url=vuln_data["url"]
-                            )
-                            session.add(new_vulnerability)
-                            session.commit()
-                            print(f"{GREEN}   [+] Command Injection (Time-Based) found at: {url} ({method}) with payload '{payload}' (Delay: {elapsed_time:.2f}s){NC}")
-                            return # Found one, move to next endpoint
-                        except IntegrityError:
-                            session.rollback()
-                            logger.info(f"Duplicate Command Injection (Time-Based) vulnerability found and skipped for URL: {url}")
-                        except Exception as db_e:
-                            session.rollback()
-                            logger.error(f"Error saving Command Injection (Time-Based) vulnerability to DB: {db_e}")
+                        try_save_vulnerability(vuln_data, session, scan_id)
+                        print(f"{GREEN}   [+] Command Injection (Time-Based) found at: {url} ({method}) with payload '{payload}' (Delay: {elapsed_time:.2f}s){NC}")
+                        return # Found one, move to next endpoint
                 except requests.exceptions.Timeout:
                     end_time = time.time()
                     elapsed_time = end_time - start_time
@@ -354,24 +282,9 @@ def test_time_based_injection(endpoint_data, session, scan_id):
                             "delay_detected_seconds": f"{elapsed_time:.2f}",
                             "description": f"Time-based command injection detected (timeout) via {method} body parameter '{param_name}' using payload '{payload}'. Response delayed by {elapsed_time:.2f}s."
                         }
-                        try:
-                            new_vulnerability = Vulnerability(
-                                scan_id=scan_id,
-                                vulnerability_data=vuln_data,
-                                vulnerability_type=vuln_data["vulnerability"],
-                                severity=vuln_data["severity"],
-                                url=vuln_data["url"]
-                            )
-                            session.add(new_vulnerability)
-                            session.commit()
-                            print(f"{GREEN}   [+] Command Injection (Time-Based - Timeout) found at: {url} ({method}) with payload '{payload}' (Delay: {elapsed_time:.2f}s){NC}")
-                            return
-                        except IntegrityError:
-                            session.rollback()
-                            logger.info(f"Duplicate Command Injection (Time-Based - Timeout) vulnerability found and skipped for URL: {url}")
-                        except Exception as db_e:
-                            session.rollback()
-                            logger.error(f"Error saving Command Injection (Time-Based - Timeout) vulnerability to DB: {db_e}")
+                        try_save_vulnerability(vuln_data, session, scan_id)
+                        print(f"{GREEN}   [+] Command Injection (Time-Based - Timeout) found at: {url} ({method}) with payload '{payload}' (Delay: {elapsed_time:.2f}s){NC}")
+                        return
                 except requests.exceptions.RequestException as e:
                     logger.debug(f"Request failed for {url} ({method}): {e}")
                 except Exception as e:
@@ -391,84 +304,38 @@ def run_commix_on_endpoint(endpoint_data, output_dir, session, scan_id):
         print(f"{RED}[!] Commix is not installed or not in PATH. Please install it to use advanced command injection scanning. Skipping.{NC}")
         return
 
-    # Create a temporary file for Commix input for this specific request
-    # Commix can take a single URL with method and data via CLI flags.
-    # It's usually better to create a request file (--req) for complex POST/PUT requests.
     temp_req_file_path = None
     commix_command_parts = [
         "commix",
-        f"-u \"{url}\"",
         f"--output-dir=\"{output_dir}\"",
         "--batch",
         "--level=3", # Adjust level for depth
         "--risk=3"   # Adjust risk for aggressiveness
     ]
 
-    if method == "POST":
-        if body_params:
-            # Commix expects POST data to be specified with --data
-            # If the body is JSON, Commix might not interpret it directly as JSON parameters.
-            # It's best to save the full request to a file (--req) for non-GET methods.
-            temp_req_filename = f"commix_req_{abs(hash(url))}_{method}.txt"
-            temp_req_file_path = os.path.join(output_dir, temp_req_filename)
-            
-            with open(temp_req_file_path, "w") as f:
-                f.write(f"{method} {urlparse(url).path}?{urlparse(url).query} HTTP/1.1\n")
-                f.write(f"Host: {urlparse(url).netloc}\n")
-                for header, value in headers.items():
-                    f.write(f"{header}: {value}\n")
-                f.write("\n")
-                # Handle JSON body specifically, or form-urlencoded
-                content_type = headers.get("Content-Type", "").lower()
-                if "application/json" in content_type:
-                    f.write(json.dumps(body_params))
-                elif "application/x-www-form-urlencoded" in content_type:
-                    f.write(urlencode(body_params))
-                else:
-                    f.write(str(body_params)) # Fallback if not specifically handled
+    if method == "GET":
+        commix_command_parts.append(f"-u \"{url}\"")
+    else: # POST, PUT, PATCH, DELETE
+        # Create a temporary file for Commix input for non-GET methods
+        temp_req_filename = f"commix_req_{abs(hash(url))}_{method}.txt"
+        temp_req_file_path = os.path.join(output_dir, temp_req_filename)
+        
+        with open(temp_req_file_path, "w") as f:
+            f.write(f"{method} {urlparse(url).path}?{urlparse(url).query} HTTP/1.1\n")
+            f.write(f"Host: {urlparse(url).netloc}\n")
+            for header, value in headers.items():
+                f.write(f"{header}: {value}\n")
+            f.write("\n")
+            # Handle JSON body specifically, or form-urlencoded
+            content_type = headers.get("Content-Type", "").lower()
+            if "application/json" in content_type:
+                f.write(json.dumps(body_params))
+            elif "application/x-www-form-urlencoded" in content_type:
+                f.write(urlencode(body_params))
+            else:
+                f.write(str(body_params)) # Fallback if not specifically handled
 
-            commix_command_parts = [
-                "commix",
-                f"--req=\"{temp_req_file_path}\"",
-                f"--output-dir=\"{output_dir}\"",
-                "--batch",
-                "--level=3",
-                "--risk=3"
-            ]
-        else:
-            print(f"{YELLOW}[!] No body parameters found for {method} request to {url}. Commix might be less effective.{NC}")
-            # Still run with -u, commix will try to detect parameters if possible.
-    
-    elif method in ["PUT", "PATCH", "DELETE"]:
-        # Commix supports PUT/DELETE methods with -m (method) and --data or --req
-        if body_params:
-            temp_req_filename = f"commix_req_{abs(hash(url))}_{method}.txt"
-            temp_req_file_path = os.path.join(output_dir, temp_req_filename)
-            with open(temp_req_file_path, "w") as f:
-                f.write(f"{method} {urlparse(url).path}?{urlparse(url).query} HTTP/1.1\n")
-                f.write(f"Host: {urlparse(url).netloc}\n")
-                for header, value in headers.items():
-                    f.write(f"{header}: {value}\n")
-                f.write("\n")
-                content_type = headers.get("Content-Type", "").lower()
-                if "application/json" in content_type:
-                    f.write(json.dumps(body_params))
-                elif "application/x-www-form-urlencoded" in content_type:
-                    f.write(urlencode(body_params))
-                else:
-                    f.write(str(body_params))
-
-            commix_command_parts = [
-                "commix",
-                f"--req=\"{temp_req_file_path}\"",
-                f"--output-dir=\"{output_dir}\"",
-                "--batch",
-                "--level=3",
-                "--risk=3"
-            ]
-        else:
-            # For PUT/PATCH/DELETE with no body, just use -u
-            commix_command_parts.append(f"--method=\"{method}\"")
+        commix_command_parts.append(f"--req=\"{temp_req_file_path}\"")
 
     commix_command = " ".join(commix_command_parts)
     
@@ -476,71 +343,46 @@ def run_commix_on_endpoint(endpoint_data, output_dir, session, scan_id):
     
     print(f"{GREEN}[+] Commix scan completed for {url}{NC}")
     
-    potential_vulns = []
-    # Regex to find potential vulnerabilities mentioned in commix output
-    vuln_patterns = [
-        r"vulnerable to (command injection)",
-        r"possible command injection found at (.*?)\n",
-        r"parameter '(.*?)' is vulnerable"
-    ]
+    # Parse Commix output for vulnerabilities
+    # Commix usually prints "vulnerable" or "injection found" if successful.
+    if "vulnerable" in stdout.lower() or "injection found" in stdout.lower():
+        vuln_type = "Command Injection (Commix)"
+        severity = "high"
+        description = f"Commix reported command injection vulnerability for {url} ({method}).\nCommix Output:\n{stdout}"
+        
+        # Attempt to extract more specific details from Commix output
+        payload_match = re.search(r"payload: '(.*?)'", stdout)
+        payload = payload_match.group(1) if payload_match else "N/A"
 
-    for line in stdout.splitlines():
-        line_lower = line.lower()
-        if "vulnerable" in line_lower or "injection found" in line_lower:
-            vuln_url = url # Use the original URL being tested
-            
-            payload_match = re.search(r"payload: '(.*?)'", line)
-            payload = payload_match.group(1) if payload_match else "N/A"
+        param_match = re.search(r"parameter '(.*?)' is vulnerable", stdout)
+        parameter = param_match.group(1) if param_match else "N/A"
 
-            param_match = re.search(r"parameter '(.*?)' is vulnerable", line)
-            parameter = param_match.group(1) if param_match else "N/A"
-
-            vuln_type = "Command Injection (Commix)"
-            severity = "high"
-
-            vuln_data = {
-                "vulnerability": vuln_type,
-                "severity": severity,
-                "url": vuln_url,
-                "method": method,
-                "tool": "Commix",
-                "commix_output_line": line, # Store the raw line for context
-                "parameter": parameter,
-                "payload": payload,
-                "description": f"Commix identified command injection via parameter '{parameter}' with payload '{payload}'. Raw output: {line}"
-            }
-            potential_vulns.append(vuln_data)
-    
-    if session and scan_id is not None:
-        for vuln in potential_vulns:
-            try:
-                new_vulnerability = Vulnerability(
-                    scan_id=scan_id,
-                    vulnerability_data=vuln,
-                    vulnerability_type=vuln["vulnerability"],
-                    severity=vuln["severity"],
-                    url=vuln["url"]
-                )
-                session.add(new_vulnerability)
-                session.commit()
-                print(f"{GREEN}   [+] Command Injection (Commix) stored for: {vuln['url']}{NC}")
-            except IntegrityError:
-                session.rollback()
-                logger.info(f"Duplicate Commix Command Injection vulnerability found and skipped for URL: {vuln['url']}")
-            except Exception as db_e:
-                session.rollback()
-                logger.error(f"Error saving Commix Command Injection vulnerability to DB: {db_e}")
+        vuln_data = {
+            "vulnerability": vuln_type,
+            "severity": severity,
+            "url": url,
+            "method": method,
+            "tool": "Commix",
+            "parameter": parameter,
+            "payload": payload,
+            "description": description,
+            "commix_full_output": stdout # Store full output for debugging/context
+        }
+        try_save_vulnerability(vuln_data, session, scan_id)
+        print(f"{GREEN}   [+] Command Injection (Commix) stored for: {url}{NC}")
     else:
-        print(f"{YELLOW}[!] Session or scan_id not provided. Commix results not stored in database.{NC}")
+        print(f"{YELLOW}   [!] Commix did not report any vulnerabilities for {url}.{NC}")
     
+    # Clean up temporary request file
     if temp_req_file_path and os.path.exists(temp_req_file_path):
         os.remove(temp_req_file_path)
-    print(f"{GREEN}[+] Commix scan results processed.{NC}")
+        print(f"{GREEN}[+] Cleaned up temporary request file: {temp_req_file_path}{NC}")
 
 # Main command injection function
-def commandinjection(output_dir, session=None, scan_id=None):
+def commandinjection(output_dir, session=None, scan_id=None, fallback_url=None):
     """
     Performs command injection testing on URLs and endpoints from the database.
+    If no endpoints are found in the database, it can test a single fallback_url.
     Results are stored in the database.
     """
     print(f"{YELLOW}[+] Starting Command Injection scan...{NC}")
@@ -549,41 +391,56 @@ def commandinjection(output_dir, session=None, scan_id=None):
         print(f"{RED}[!] Database session or scan_id not provided. Cannot perform Command Injection scan.{NC}")
         return
 
-    # Fetch endpoints from the database for the current scan
-    endpoints_to_test = session.query(Endpoint).filter_by(scan_id=scan_id).all()
+    global found_vulnerabilities
+    found_vulnerabilities = [] # Reset for each scan
 
-    if not endpoints_to_test:
-        print(f"{RED}[!] No endpoints found in the database for scan_id {scan_id} to test for Command Injection.{NC}")
+    endpoints_to_test_data = []
+
+    # Fetch endpoints from the database for the current scan
+    db_endpoints = session.query(Endpoint).filter_by(scan_id=scan_id).all()
+
+    if db_endpoints:
+        print(f"{BLUE}[*] Found {len(db_endpoints)} endpoints in the database for scan ID {scan_id}.{NC}")
+        for ep in db_endpoints:
+            endpoints_to_test_data.append({
+                "url": ep.url,
+                "method": ep.method,
+                "body_params": json.loads(ep.body_params) if isinstance(ep.body_params, str) and ep.body_params else {},
+                "extra_headers": json.loads(ep.extra_headers) if isinstance(ep.extra_headers, str) and ep.extra_headers else {}
+            })
+    elif fallback_url:
+        print(f"{YELLOW}[!] No endpoints found in the database for scan_id {scan_id}. Using fallback URL: {fallback_url}{NC}")
+        # For fallback_url, we assume GET method and no body/headers unless specified.
+        # In a real scenario, you might want to allow method/headers/body for fallback_url too.
+        endpoints_to_test_data.append({
+            "url": fallback_url,
+            "method": "GET", # Default to GET for fallback if not specified
+            "body_params": {},
+            "extra_headers": {}
+        })
+    else:
+        print(f"{RED}[!] No endpoints found in the database and no fallback_url provided. Cannot perform Command Injection scan.{NC}")
         return
 
     max_threads = 5 # Limit threads for this specific test to avoid overwhelming the target/rate limits
     
     threads = []
-    for endpoint in endpoints_to_test:
-        # Convert endpoint object to a dictionary for easier passing to functions
-        endpoint_data = {
-            "url": endpoint.url,
-            "method": endpoint.method,
-            "body_params": json.loads(endpoint.body_params) if isinstance(endpoint.body_params, str) and endpoint.body_params else {},
-            "extra_headers": json.loads(endpoint.extra_headers) if isinstance(endpoint.extra_headers, str) and endpoint.extra_headers else {}
-        }
+    for endpoint_data in endpoints_to_test_data:
+        # Create threads for each test type
+        t_simple = threading.Thread(target=test_simple_injection, args=(endpoint_data, session, scan_id))
+        t_time_based = threading.Thread(target=test_time_based_injection, args=(endpoint_data, session, scan_id))
+        t_commix = threading.Thread(target=run_commix_on_endpoint, args=(endpoint_data, output_dir, session, scan_id))
         
-        t1 = threading.Thread(target=test_simple_injection, args=(endpoint_data, session, scan_id))
-        t2 = threading.Thread(target=test_time_based_injection, args=(endpoint_data, session, scan_id))
-        t3 = threading.Thread(target=run_commix_on_endpoint, args=(endpoint_data, output_dir, session, scan_id)) # New Commix thread
+        threads.extend([t_simple, t_time_based, t_commix])
         
-        threads.append(t1)
-        threads.append(t2)
-        threads.append(t3) # Add Commix thread
-        
-        t1.start()
-        t2.start()
-        t3.start() # Start Commix thread
+        t_simple.start()
+        t_time_based.start()
+        t_commix.start()
 
     for t in threads:
         t.join() # Wait for all threads to complete
 
-    print(f"{GREEN}[+] Command Injection scan completed. Results stored in database.{NC}")
+    print(f"{GREEN}[+] Command Injection scan completed. Total vulnerabilities found and stored: {len(found_vulnerabilities)}{NC}")
 
 # This part is for direct testing of the module
 if __name__ == "__main__":
@@ -630,9 +487,14 @@ if __name__ == "__main__":
             test_session.rollback()
             logger.error(f"Error adding dummy endpoint to DB: {db_e}")
 
-    print(f"{BLUE}[+] Running Command Injection test with commix integration...{NC}")
-    commandinjection("dummy_file_path", dummy_output_dir, session=test_session, scan_id=test_scan_id)
+    print(f"{BLUE}[+] Running Command Injection test with database integration...{NC}")
+    # Example of running with database endpoints
+    commandinjection(output_dir=dummy_output_dir, session=test_session, scan_id=test_scan_id)
     
+    # Example of running with a fallback URL if DB is empty (uncomment to test)
+    # print(f"\n{BLUE}[+] Running Command Injection test with fallback URL...{NC}")
+    # commandinjection(output_dir=dummy_output_dir, session=test_session, scan_id=test_scan_id + 1, fallback_url="http://fallback.example.com/search?query=test")
+
     print(f"{BLUE}[+] Verifying results from database...{NC}")
     retrieved_vulns = test_session.query(Vulnerability).filter_by(scan_id=test_scan_id).all()
     for vuln in retrieved_vulns:

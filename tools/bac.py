@@ -7,7 +7,8 @@ import logging
 import re
 from sqlalchemy.exc import IntegrityError
 from tools.database import Vulnerability, Endpoint # Import Vulnerability and Endpoint models
-from tools.ai_assistant import gemini # Assuming ai_assistant is available
+from tools.ai_assistant import gemini ,clean_gemini_response
+from tools.database import try_save_vulnerability
 
 # Define colors for console output
 RED = '\033[0;31m'
@@ -21,17 +22,6 @@ BOLD = '\033[1m'
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-def clean_gemini_response(raw_text):
-    """
-    Removes markdown JSON code block wrappers like ```json ... ```
-    to ensure the string is valid JSON for parsing.
-    """
-    if raw_text.startswith("```json"):
-        raw_text = raw_text[len("```json"):].strip()
-    if raw_text.endswith("```"):
-        raw_text = raw_text[:-3].strip()
-    return raw_text
 
 def send_request(req_data):
     """
@@ -89,30 +79,12 @@ def send_request(req_data):
         logger.error(f"General error sending request to {url} ({method}): {str(e)}")
         return {"error": str(e)}
 
-def try_save_vulnerability(vuln_data, session, scan_id):
-    """Helper to save a vulnerability, handling duplicates and errors."""
-    try:
-        new_vulnerability = Vulnerability(
-            scan_id=scan_id,
-            vulnerability_data=vuln_data,
-            vulnerability_type=vuln_data["vulnerability"],
-            severity=vuln_data["severity"],
-            url=vuln_data["url"]
-        )
-        session.add(new_vulnerability)
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-        logger.info(f"Duplicate vulnerability found and skipped: {vuln_data.get('vulnerability')} at {vuln_data.get('url')}")
-    except Exception as db_e:
-        session.rollback()
-        logger.error(f"Error saving vulnerability to DB: {db_e}")
-
 def bac_check_with_ai(original_request_data, modified_request_data_user2):
     """
     Uses AI to analyze the original request (user 1) and the same request
     sent with user 2's session (user 1's request with user 2's headers)
     to determine Broken Access Control.
+    This function is called ONLY if User 2's response status is not 401/403.
     """
     print(f"{BLUE}[*] AI Analyzing for Broken Access Control for {original_request_data.get('url', 'N/A')}{NC}")
 
@@ -132,8 +104,9 @@ def bac_check_with_ai(original_request_data, modified_request_data_user2):
     {json.dumps(modified_request_data_user2.get('response', {}), indent=2)}
 
     Based on these two requests and their responses, determine if there is a Broken Access Control vulnerability.
+    Crucially, User 2's response status was NOT 401 or 403, which suggests potential unauthorized access.
     Consider the following for a vulnerability:
-    1. User 2's request should ideally be denied (e.g., 401 Unauthorized, 403 Forbidden, redirect to login).
+    1. User 2's request should ideally have been denied (e.g., 401 Unauthorized, 403 Forbidden, redirect to login). Since it wasn't, we need to check the content.
     2. If User 2's request gets a 200 OK or similar success code AND the content returned appears to be User 1's data or privileged data (that User 2 should not see), it's a vulnerability.
     3. Look for discrepancies in content or functionality that expose User 1's private information or allow unauthorized actions from User 2.
     4. If the content for User 1 and User 2 is identical for what should be private data, it's a vulnerability.
@@ -227,27 +200,34 @@ def process_single_endpoint_for_bac(endpoint_obj, session, scan_id, headers1, he
         logger.error(f"Failed to get response for User 2 request ({url}): {res_user2['error']}. Skipping BAC test for this endpoint.")
         return
 
-    # Send data to AI for analysis
-    print(f"{BLUE}[*] Sending responses to AI for Broken Access Control analysis...{NC}")
-    ai_analysis_result = bac_check_with_ai(original_request_data, modified_request_data_user2)
-
-    if ai_analysis_result and ai_analysis_result.get("vulnerable") is True:
-        vuln_data = {
-            "vulnerability": "Broken Access Control",
-            "severity": ai_analysis_result.get("severity", "medium"),
-            "url": url,
-            "method": method,
-            "description": ai_analysis_result.get("reason", "Broken Access Control detected."),
-            "evidence": ai_analysis_result.get("evidence", "No specific evidence provided by AI."),
-            "original_response_status": res_user1.get("status"),
-            "user2_response_status": res_user2.get("status"),
-            "vulnerable_resource_path": ai_analysis_result.get("vulnerable_resource_path", urlparse(url).path),
-            "ai_analysis": ai_analysis_result # Store full AI analysis for context
-        }
-        try_save_vulnerability(vuln_data, session, scan_id)
-        print(f"{RED}   [!!!] Broken Access Control vulnerability stored for: {url} (Severity: {vuln_data['severity']}){NC}")
+    # Simplified logic for detection: Check User 2's response status first
+    user2_status = res_user2.get("status")
+    if user2_status in [403, 401]:
+        print(f"{GREEN}   [+] Access correctly blocked for User 2 ({user2_status}) for: {url}{NC}")
+        # No need to store anything if access is correctly blocked
+        return
     else:
-        print(f"{GREEN}   [+] No Broken Access Control vulnerability detected by AI for: {url}{NC}")
+        # If status is not 403/401, then use AI to decide if it's a BAC vulnerability
+        print(f"{YELLOW}   [!] User 2 received status {user2_status} for {url}. Sending to AI for detailed analysis...{NC}")
+        ai_analysis_result = bac_check_with_ai(original_request_data, modified_request_data_user2)
+
+        if ai_analysis_result and ai_analysis_result.get("vulnerable") is True:
+            vuln_data = {
+                "vulnerability": "Broken Access Control",
+                "severity": ai_analysis_result.get("severity", "medium"),
+                "url": url,
+                "method": method,
+                "description": ai_analysis_result.get("reason", "Broken Access Control detected."),
+                "evidence": ai_analysis_result.get("evidence", "No specific evidence provided by AI."),
+                "original_response_status": res_user1.get("status"),
+                "user2_response_status": res_user2.get("status"),
+                "vulnerable_resource_path": ai_analysis_result.get("vulnerable_resource_path", urlparse(url).path),
+                "ai_analysis": ai_analysis_result # Store full AI analysis for context
+            }
+            try_save_vulnerability(vuln_data, session, scan_id)
+            print(f"{RED}   [!!!] Broken Access Control vulnerability stored for: {url} (Severity: {vuln_data['severity']}){NC}")
+        else:
+            print(f"{GREEN}   [+] No Broken Access Control vulnerability detected by AI for: {url}{NC}")
 
 def bac_scan(session, scan_id, headers1, headers2, max_workers=4):
     """
@@ -320,13 +300,13 @@ if __name__ == "__main__":
     # Add some dummy endpoints to the database for BAC testing
     dummy_endpoints_data = [
         # Scenario 1: Profile page accessible by ID
-        {"url": "http://test-bac-target.com/profile/user/123", "method": "GET", "body_params": {}, "extra_headers": {}},
+        {"url": "[http://test-bac-target.com/profile/user/123](http://test-bac-target.com/profile/user/123)", "method": "GET", "body_params": {}, "extra_headers": {}},
         # Scenario 2: Admin panel (should be restricted)
-        {"url": "http://test-bac-target.com/admin/dashboard", "method": "GET", "body_params": {}, "extra_headers": {}},
+        {"url": "[http://test-bac-target.com/admin/dashboard](http://test-bac-target.com/admin/dashboard)", "method": "GET", "body_params": {}, "extra_headers": {}},
         # Scenario 3: Update privileged setting (POST request)
-        {"url": "http://test-bac-target.com/settings/update_privileged", "method": "POST", "body_params": {"setting_id": "confidential_setting", "value": "new_value"}, "extra_headers": {"Content-Type": "application/json"}},
+        {"url": "[http://test-bac-target.com/settings/update_privileged](http://test-bac-target.com/settings/update_privileged)", "method": "POST", "body_params": {"setting_id": "confidential_setting", "value": "new_value"}, "extra_headers": {"Content-Type": "application/json"}},
         # Static file, should be filtered out
-        {"url": "http://test-bac-target.com/css/style.css", "method": "GET", "body_params": {}, "extra_headers": {}}, 
+        {"url": "[http://test-bac-target.com/css/style.css](http://test-bac-target.com/css/style.css)", "method": "GET", "body_params": {}, "extra_headers": {}}, 
     ]
 
     for ep_data in dummy_endpoints_data:

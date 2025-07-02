@@ -12,6 +12,9 @@ from concurrent.futures import ThreadPoolExecutor
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
+# Import WebDriverManager for automatic driver management
+from webdriver_manager.chrome import ChromeDriverManager
+from webdriver_manager.firefox import GeckoDriverManager
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.common.by import By
@@ -71,13 +74,13 @@ VIRUSTOTAL_API_KEY = config['API_KEYS'].get('virustotal', '')
 
 def print_banner():
     print(f"{CYAN}{BOLD}")
-    print(r"                                                    ")
-    print(r"                _        _____                      ")
-    print(r"     /\        | |      |  __ \                     ")
-    print(r"    /  \  _   _| |_ ___ | |__) |___  ___ ___  _ __  ")
-    print(r"   / /\ \| | | | __/ _ \|  _  // _ \/ __/ _ \| '_ \ ")
-    print(r"  / ____ \ |_| | || (_) | | \ \  __/ (_| (_) | | | |")
-    print(r" /_/    \_\__,_|\__\___/|_|  \_\___|\___\___/|_| |_|")
+    print(r"                                                         ")
+    print(r"             _       _____                             ")
+    print(r"   /\        | |     |  __ \                            ")
+    print(r"  /  \  _   _| |_ ___ | |__) |___  ___ ___  _ __  ")
+    print(r" / /\ \| | | | __/ _ \|  _  // _ \/ __/ _ \| '_ \ ")
+    print(r"/ ____ \ |_| | || (_) | | \ \  __/ (_| (_) | | | |")
+    print(r"/_/    \_\__,_|\__\___/|_|  \_\___|\___\___/|_| |_|")
     print(f"{NC}")
     print(f"{YELLOW}{BOLD}By: omar samy{NC}")
     print(f"{BLUE}{BOLD}Twitter: @00xmora{NC}")
@@ -138,7 +141,8 @@ def setup_domain_directory(project_path, domain):
 
 def get_driver(headless=True):
     """
-    Initialize a browser driver with fallback (Selenium 4.x+ compatible).
+    Initialize a browser driver using webdriver_manager for automatic setup.
+    Tries Chrome first, then Firefox.
     """
     try:
         chrome_options = ChromeOptions()
@@ -147,37 +151,30 @@ def get_driver(headless=True):
             chrome_options.add_argument("--headless=new")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
-
-        chromedriver_path = shutil.which("chromedriver")
-        if not chromedriver_path:
-            if platform.system() == "Windows":
-                chromedriver_path = "C:\\Program Files\\Google\\Chrome\\Application\\chromedriver.exe"
-            else:
-                chromedriver_path = "/usr/bin/chromedriver"
-
-        service = ChromeService(executable_path=chromedriver_path)
-        print(f"[DEBUG] Using ChromeDriver at: {chromedriver_path}")
+        
+        # Use ChromeDriverManager to get the path to the chromedriver executable
+        driver_path = ChromeDriverManager().install()
+        print(f"[DEBUG] Using ChromeDriver from: {driver_path}")
+        service = ChromeService(executable_path=driver_path)
         return webdriver.Chrome(service=service, options=chrome_options)
 
     except Exception as e:
-        logger.warning(f"Chrome WebDriver failed: {str(e)}. Falling back to Firefox.")
+        logger.warning(f"Chrome WebDriver failed: {str(e)}. Falling back to Firefox. Ensure Chrome is installed if you prefer it.")
         try:
             firefox_options = FirefoxOptions()
             if headless:
                 firefox_options.add_argument("--headless")
-
-            geckodriver_path = shutil.which("geckodriver")
-            if not geckodriver_path:
-                geckodriver_path = "/usr/bin/geckodriver"
-
-            service = FirefoxService(executable_path=geckodriver_path)
-            print(f"[DEBUG] Using GeckoDriver at: {geckodriver_path}")
+            
+            # Use GeckoDriverManager to get the path to the geckodriver executable
+            driver_path = GeckoDriverManager().install()
+            print(f"[DEBUG] Using GeckoDriver from: {driver_path}")
+            service = FirefoxService(executable_path=driver_path)
             return webdriver.Firefox(service=service, options=firefox_options)
 
         except Exception as e:
-            logger.error(f"Firefox WebDriver failed: {str(e)}. No browser available.")
+            logger.error(f"Firefox WebDriver failed: {str(e)}. No browser available. "
+                         f"Please ensure Firefox is installed and/or install 'webdriver_manager' if you haven't already (`pip install webdriver-manager`).")
             raise Exception("No supported browser WebDriver found.")
-
 
 
 def is_valid_url(url, base_domain):
@@ -448,7 +445,7 @@ def crawl_website(url, headers=None, max_pages=10, headless=True, session=None, 
                                 pass
                     except Exception as e:
                         logger.warning(f"Error triggering event on element: {str(e)}")
-            
+                
             except Exception as e:
                 logger.error(f"Error interacting with elements on {current_url}: {str(e)}")
             
@@ -781,7 +778,7 @@ def passive_subdomain_enum(domain, threads=20, session=None, scan_id=None):
     
     with ThreadPoolExecutor(max_workers=threads) as executor:
         futures = {executor.submit(run_command, cmd, True, outfile): outfile 
-                  for cmd, outfile in commands}
+                   for cmd, outfile in commands}
         for future in futures:
             try:
                 future.result()
@@ -931,8 +928,8 @@ def active_subdomain_enum(domain, session=None, scan_id=None, wordlist_path=None
                             except json.JSONDecodeError:
                                 print(f"{RED}[!] Failed to parse dnsrecon JSON output for {dnsrecon_output}{NC}")
                             os.remove(dnsrecon_output)
-                    else:
-                        print(f"{RED}[!] Failed to run dnsrecon with {ns_option}{NC}")
+                        else:
+                            print(f"{RED}[!] Failed to run dnsrecon with {ns_option}{NC}")
             else:
                 print(f"{YELLOW}[!] No authoritative DNS server IPs resolved, using system resolvers for dnsrecon{NC}")
                 dnsrecon_output = "dnsrecon_output.json"
@@ -948,8 +945,8 @@ def active_subdomain_enum(domain, session=None, scan_id=None, wordlist_path=None
                         except json.JSONDecodeError:
                             print(f"{RED}[!] Failed to parse dnsrecon JSON output{NC}")
                         os.remove(dnsrecon_output)
-                else:
-                    print(f"{RED}[!] Failed to run dnsrecon with system resolvers{NC}")
+                    else:
+                        print(f"{RED}[!] Failed to run dnsrecon with system resolvers{NC}")
     except Exception as e:
         print(f"{RED}[!] Error in dnsrecon part of active subdomain enumeration: {e}{NC}")
 
@@ -979,8 +976,8 @@ def active_subdomain_enum(domain, session=None, scan_id=None, wordlist_path=None
                 except json.JSONDecodeError:
                     print(f"{RED}[!] Failed to parse FFUF JSON output for {ffuf_output_file}{NC}")
                 os.remove(ffuf_output_file)
-        else:
-            print(f"{RED}[!] Failed to run FFUF for virtual host enumeration{NC}")
+            else:
+                print(f"{RED}[!] Failed to run FFUF for virtual host enumeration{NC}")
 
     # Store all found live domains (from dnsrecon and ffuf) in the database as 'live_subdomain'
     if session and scan_id is not None:

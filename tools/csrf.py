@@ -7,6 +7,7 @@ import logging
 from sqlalchemy.exc import IntegrityError
 from tools.database import Vulnerability, Endpoint # Import Vulnerability and Endpoint models
 from tools.ai_assistant import gemini # Use the consistent ai_assistant integration
+from tools.database import try_save_vulnerability
 
 # Define colors for console output
 RED = '\033[0;31m'
@@ -77,25 +78,6 @@ def send_request(req_data):
         logger.error(f"Error sending request to {url}: {str(e)}")
         return {"error": str(e)}
 
-# Helper to save a vulnerability, handling duplicates and errors.
-def try_save_vulnerability(vuln_data, session, scan_id):
-    try:
-        new_vulnerability = Vulnerability(
-            scan_id=scan_id,
-            vulnerability_data=vuln_data,
-            vulnerability_type=vuln_data["vulnerability"],
-            severity=vuln_data["severity"],
-            url=vuln_data["url"]
-        )
-        session.add(new_vulnerability)
-        session.commit()
-    except IntegrityError:
-        session.rollback()
-        logger.info(f"Duplicate vulnerability found and skipped: {vuln_data.get('vulnerability')} at {vuln_data.get('url')}")
-    except Exception as db_e:
-        session.rollback()
-        logger.error(f"Error saving vulnerability to DB: {db_e}")
-
 # Function that asks the AI to check whether there is a CSRF defense mechanism in the request
 def csrfCheck(request_data, session, scan_id):
     """
@@ -164,16 +146,16 @@ def csrfCheck(request_data, session, scan_id):
             description = f"No immediate CSRF vulnerability detected by AI. Defenses: {', '.join(ai_response.get('defense_mechanisms', ['None']))}"
             print(f"{GREEN}   [+] AI indicates no immediate CSRF vulnerability for {request_data.get('url', 'N/A')}{NC}")
             
-        vuln_data = {
-            "vulnerability": vulnerability_type,
-            "severity": severity,
-            "url": request_data.get("url", "N/A"),
-            "method": request_data.get("method", "N/A"),
-            "description": description,
-            "ai_analysis": ai_response # Store full AI analysis for context
-        }
-        
-        if flag == 1: # Only save if confirmed high vulnerability
+        # Only save if confirmed high vulnerability (flag == 1)
+        if flag == 1: 
+            vuln_data = {
+                "vulnerability": vulnerability_type,
+                "severity": severity,
+                "url": request_data.get("url", "N/A"),
+                "method": request_data.get("method", "N/A"),
+                "description": description,
+                "ai_analysis": ai_response # Store full AI analysis for context
+            }
             try_save_vulnerability(vuln_data, session, scan_id)
         
         return ai_response, flag # Return AI response and flag for further testing decision
@@ -225,6 +207,8 @@ def get_csrf_token_from_response(response_body, csrf_param_name):
 def csrfTests(ai_analysis_response, original_request_data, session, scan_id, headers1=None, headers2=None):
     print(f"{BLUE}[*] Performing CSRF tests for: {original_request_data.get('url', 'N/A')}{NC}")
     
+    # The AI analysis should have already indicated potential vulnerability (flag == 2)
+    # If ai_analysis_response is None or indicates not vulnerable, this function shouldn't be called.
     if not ai_analysis_response or ai_analysis_response.get("vulnerable") is not True:
         print(f"{YELLOW}   [!] AI analysis did not indicate initial vulnerability for active tests. Skipping.{NC}")
         return
@@ -435,7 +419,7 @@ def csrfTests(ai_analysis_response, original_request_data, session, scan_id, hea
     return
     
 # Main CSRF function
-def csrf(urls_file_path=None, session=None, scan_id=None, headers1=None, headers2=None):
+def csrf(session=None, scan_id=None, headers1=None, headers2=None):
     """
     Performs CSRF vulnerability checks and tests based on endpoints from the database.
     Optional headers1 and headers2 can be provided for multi-user testing.
@@ -457,7 +441,7 @@ def csrf(urls_file_path=None, session=None, scan_id=None, headers1=None, headers
 
     if not requests_to_test_from_db:
         print(f"{YELLOW}[!] No relevant POST/PUT/DELETE/PATCH endpoints found for CSRF testing for scan ID {scan_id}. Skipping.{NC}")
-        return []
+        return
 
     # Convert Endpoint objects to dictionary format expected by AI and send_request
     requests_data_for_ai = []
@@ -490,10 +474,12 @@ def csrf(urls_file_path=None, session=None, scan_id=None, headers1=None, headers
 
     if not requests_data_for_ai:
         print(f"{RED}[!] No suitable requests found from DB to test for CSRF after filtering.{NC}")
-        return []
+        return
 
+    tested_endpoints_count = 0
     for req_data in requests_data_for_ai:
         ai_res, flag = csrfCheck(req_data, session, scan_id)
+        tested_endpoints_count += 1
         
         # Only perform active tests if the initial AI analysis indicates a potential vulnerability (flag == 2)
         # If flag is 1 (confirmed high vulnerability with no defenses), we skip active tests.
@@ -501,9 +487,9 @@ def csrf(urls_file_path=None, session=None, scan_id=None, headers1=None, headers
             if ai_res:
                 csrfTests(ai_res, req_data, session, scan_id, headers1=headers1, headers2=headers2)
         elif flag == 1:
-            print(f"{YELLOW}   [!] Skipping active CSRF tests for {req_data.get('url')} because it's already confirmed vulnerable (flag=1).{NC}")
+            print(f"{YELLOW}   [!] Skipping active CSRF tests for {req_data.get('url')} because AI already confirmed vulnerability (flag=1).{NC}")
 
-    print(f"{GREEN}[+] CSRF scan completed. Results stored in database.{NC}")
+    print(f"{GREEN}[+] CSRF scan completed. {tested_endpoints_count} endpoints were analyzed. Results stored in database.{NC}")
 
 # This part is for direct testing of the module
 if __name__ == "__main__":

@@ -131,4 +131,4 @@ def handle_login_complete_signal(data):
 
 # Run the app with the specified port using SocketIO
 if __name__ == '__main__':
-    socketio.run(flask_app, host='0.0.0.0', port=args.port, debug=True)
+    socketio.run(flask_app, host='0.0.0.0', port=args.port, debug=False)

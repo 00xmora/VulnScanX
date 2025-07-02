@@ -1,7 +1,11 @@
+import logging
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, UniqueConstraint, JSON, create_engine, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
+from sqlalchemy.exc import IntegrityError
 
+
+logger = logging.getLogger(__name__)
 Base = declarative_base()
 
 class ScanHistory(Base):
@@ -86,3 +90,27 @@ def get_scan_results_by_domain(session, domain):
         "endpoints": endpoints_data,
         "vulnerabilities": [v.vulnerability_data for v in vulnerabilities]
     }
+
+
+def try_save_vulnerability(vuln_data, session, scan_id):
+    """
+    Saves a vulnerability to the database with error handling.
+    Avoids duplicates and logs any issues.
+    """
+    try:
+        new_vulnerability = Vulnerability(
+            scan_id=scan_id,
+            vulnerability_data=vuln_data,
+            vulnerability_type=vuln_data["vulnerability"],
+            severity=vuln_data["severity"],
+            url=vuln_data["url"]
+        )
+        session.add(new_vulnerability)
+        session.commit()
+        logger.info(f"[DB] Saved: {vuln_data['vulnerability']} at {vuln_data['url']}")
+    except IntegrityError:
+        session.rollback()
+        logger.info(f"[DB] Duplicate skipped: {vuln_data.get('vulnerability')} at {vuln_data.get('url')}")
+    except Exception as db_e:
+        session.rollback()
+        logger.error(f"[DB] Error saving vulnerability: {db_e}")

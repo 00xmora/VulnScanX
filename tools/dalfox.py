@@ -4,6 +4,7 @@ import os
 import logging
 from sqlalchemy.exc import IntegrityError
 from tools.database import Vulnerability # Import the Vulnerability model
+from tools.database import try_save_vulnerability
 
 # Define colors for console output
 RED = '\033[0;31m'

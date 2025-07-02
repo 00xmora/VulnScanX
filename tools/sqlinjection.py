@@ -185,7 +185,7 @@ def run_sqlmap(endpoint_data, output_dir, session, scan_id):
     print(f"{GREEN}[+] SQLMap scan for {url} ({method}) completed.{NC}")
 
 # Main SQL Injection function
-def sql_injection_test(urls_file_path, output_dir, headers=None, thread_count=1, delay=1, session=None, scan_id=None):
+def sql_injection_test(output_dir, headers=None, thread_count=1, delay=1, session=None, scan_id=None):
     """
     Performs SQL Injection testing on endpoints from the database using SQLMap.
     Results are stored in the database.

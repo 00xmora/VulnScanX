@@ -1,13 +1,14 @@
 import json
 import requests
 import os
-from urllib.parse import urlparse, urljoin, urlencode
+from urllib.parse import parse_qs, urlparse, urljoin, urlencode
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from sqlalchemy.exc import IntegrityError
 from tools.database import Vulnerability, Endpoint # Import Vulnerability and Endpoint models
 from tools.ai_assistant import gemini # Assuming ai_assistant is available and works as intended
 import re
+import time # Import time for sleep in retry logic
 
 # Define colors for console output
 RED = '\033[0;31m'
@@ -33,11 +34,58 @@ def clean_gemini_response(raw_text):
         raw_text = raw_text[:-3].strip()
     return raw_text
 
+def call_gemini_with_retry(prompt, max_retries=5, initial_delay=1):
+    """
+    Calls the Gemini API with retry logic for rate limit errors.
+    """
+    delay = initial_delay
+    for i in range(max_retries):
+        try:
+            gemini_output = gemini(prompt)
+            # Check if the output itself indicates a rate limit error (e.g., "Error 429")
+            if "Error 429" in gemini_output or "RESOURCE_EXHAUSTED" in gemini_output:
+                logger.warning(f"Gemini API rate limit hit (attempt {i+1}/{max_retries}). Retrying in {delay} seconds...")
+                time.sleep(delay)
+                delay *= 2 # Exponential backoff
+                continue
+            return clean_gemini_response(gemini_output)
+        except Exception as e:
+            logger.error(f"Error calling Gemini API (attempt {i+1}/{max_retries}): {e}")
+            time.sleep(delay)
+            delay *= 2
+    logger.error(f"Failed to get a valid response from Gemini after {max_retries} retries.")
+    return json.dumps({"error": "Gemini API call failed after multiple retries due to quota issues or other errors."})
+
+
 def send_modified_request(req_data):
     method = req_data.get("method", "GET").upper()
     url = req_data["url"]
+    
+    # Ensure headers and body are dictionaries before use
     headers = req_data.get("extra_headers", {})
+    if isinstance(headers, str):
+        try:
+            headers = json.loads(headers)
+        except json.JSONDecodeError:
+            headers = {} # Default to empty dict if string is not valid JSON
+    if not isinstance(headers, dict):
+        headers = {}
+
     body = req_data.get("body_params", None)
+    if isinstance(body, str):
+        try:
+            body = json.loads(body)
+        except json.JSONDecodeError:
+            # If not JSON, try to parse as form-urlencoded string
+            try:
+                body = parse_qs(body)
+                # parse_qs returns lists for values, convert to single values if possible
+                body = {k: v[0] if len(v) == 1 else v for k, v in body.items()}
+            except Exception:
+                body = {} # Default to empty dict if string is not valid JSON or form-urlencoded
+    if not isinstance(body, dict):
+        body = {}
+
 
     try:
         parsed = urlparse(url)
@@ -51,21 +99,25 @@ def send_modified_request(req_data):
             url = f"{scheme}://{host}{url}"
 
         # Convert dict body to form-urlencoded string if Content-Type is set
-        if isinstance(body, dict) and "application/x-www-form-urlencoded" in headers.get("Content-Type", ""):
-            body = urlencode(body)
-        elif isinstance(body, dict) and "application/json" in headers.get("Content-Type", ""):
-            body = json.dumps(body) # Convert dict to JSON string for JSON content type
+        # This part should be done *after* ensuring `body` is a dict
+        if "application/x-www-form-urlencoded" in headers.get("Content-Type", ""):
+            body_to_send = urlencode(body)
+        elif "application/json" in headers.get("Content-Type", ""):
+            body_to_send = json.dumps(body) # Convert dict to JSON string for JSON content type
+        else:
+            body_to_send = body # For other content types or if no specific type, send as is (dict or None)
+
 
         if method == "GET":
             res = requests.get(url, headers=headers)
         elif method == "POST":
-            res = requests.post(url, headers=headers, data=body)
+            res = requests.post(url, headers=headers, data=body_to_send)
         elif method == "PUT":
-            res = requests.put(url, headers=headers, data=body)
+            res = requests.put(url, headers=headers, data=body_to_send)
         elif method == "PATCH":
-            res = requests.patch(url, headers=headers, data=body)
+            res = requests.patch(url, headers=headers, data=body_to_send)
         elif method == "DELETE":
-            res = requests.delete(url, headers=headers, data=body)
+            res = requests.delete(url, headers=headers, data=body_to_send)
         else:
             return {"error": f"Unsupported HTTP method: {method}"}
 
@@ -106,9 +158,11 @@ def process_single_request(base_request_data, session, scan_id):
         - description (a brief explanation of the test)
         """
 
-        # Send prompt to Gemini
-        gemini_output = gemini(prompt)
-        gemini_output = clean_gemini_response(gemini_output)
+        # Send prompt to Gemini with retry logic
+        gemini_output = call_gemini_with_retry(prompt)
+        if "error" in gemini_output: # Check for error message from retry function
+            logger.error(f"Skipping IDOR test for {base_request_data.get('url')} due to Gemini API error: {gemini_output}")
+            return []
 
         # Parse Gemini's response
         try:
@@ -123,12 +177,25 @@ def process_single_request(base_request_data, session, scan_id):
         # Send modified requests and collect responses
         responses = []
         for i, req in enumerate(test_requests, 1):
-            if 'url' in req:
-                # Ensure modified URL is absolute by joining with original base URL if relative
-                parsed_req_url = urlparse(req['url'])
-                if not parsed_req_url.netloc: # If netloc is empty, it's likely a relative URL
-                    original_base_url_parsed = urlparse(base_request_data["url"])
-                    req['url'] = urljoin(f"{original_base_url_parsed.scheme}://{original_base_url_parsed.netloc}", req['url'])
+            # Ensure modified URL is absolute by joining with original base URL if relative
+            # This also handles cases where Gemini might return relative URLs
+            parsed_req_url = urlparse(req.get('url', ''))
+            if not parsed_req_url.netloc:
+                original_base_url_parsed = urlparse(base_request_data["url"])
+                req['url'] = urljoin(f"{original_base_url_parsed.scheme}://{original_base_url_parsed.netloc}", req['url'])
+            
+            # Ensure body_params and extra_headers are dicts for send_modified_request
+            if 'body_params' in req and isinstance(req['body_params'], str):
+                try:
+                    req['body_params'] = json.loads(req['body_params'])
+                except json.JSONDecodeError:
+                    req['body_params'] = parse_qs(req['body_params'])
+            if 'extra_headers' in req and isinstance(req['extra_headers'], str):
+                try:
+                    req['extra_headers'] = json.loads(req['extra_headers'])
+                except json.JSONDecodeError:
+                    req['extra_headers'] = {}
+
 
             res = send_modified_request(req)
             responses.append({
@@ -163,8 +230,10 @@ For each response, return a JSON object with:
 Return a JSON array of these objects.
 """
 
-        final_analysis = gemini(analysis_prompt)
-        final_analysis = clean_gemini_response(final_analysis)
+        final_analysis = call_gemini_with_retry(analysis_prompt)
+        if "error" in final_analysis: # Check for error message from retry function
+            logger.error(f"Skipping final IDOR analysis for {base_request_data.get('url')} due to Gemini API error: {final_analysis}")
+            return []
     
         # Parse analysis and store vulnerabilities in the database
         try:
@@ -174,8 +243,10 @@ Return a JSON array of these objects.
                 if v.get("vulnerable") is True:
                     url = v.get("url")
                     method = v.get("method")
-                    body_params = v.get("body_params")
-                    headers = v.get("extra_headers")
+                    # Ensure body_params and headers are stored as JSON strings
+                    body_params_str = json.dumps(v.get("body_params")) if v.get("body_params") else "{}"
+                    headers_str = json.dumps(v.get("extra_headers")) if v.get("extra_headers") else "{}"
+
                     severity = v.get("severity", "medium")
                     vulnerable_parameter = v.get("vulnerable_parameter", "unknown")
                     payload = v.get("payload", "unknown")
@@ -188,13 +259,15 @@ Return a JSON array of these objects.
                         "method": method,
                         "vulnerable_parameter": vulnerable_parameter,
                         "payload": payload,
-                        "evidence": evidence
+                        "evidence": evidence,
+                        "body_params_at_vuln": body_params_str, # Store as JSON string
+                        "headers_at_vuln": headers_str # Store as JSON string
                     }
 
                     try:
                         new_vulnerability = Vulnerability(
                             scan_id=scan_id,
-                            vulnerability_data=vuln_data,
+                            vulnerability_data=vuln_data, # This should be a dict, will be stringified by SQLAlchemy
                             vulnerability_type=vuln_data["vulnerability"],
                             severity=vuln_data["severity"],
                             url=vuln_data["url"]
@@ -243,11 +316,32 @@ def idor(url_directory, session, scan_id, max_workers=4):
     for ep in base_requests_from_db:
         # Simple heuristic to exclude static files - can be improved
         if not re.search(r'\.(css|js|ico|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|map|txt|xml|pdf)$', urlparse(ep.url).path, re.IGNORECASE):
+            
+            # IMPORTANT: Parse body_params and extra_headers from JSON strings to dicts
+            parsed_body_params = {}
+            if ep.body_params:
+                try:
+                    parsed_body_params = json.loads(ep.body_params)
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to decode body_params JSON for {ep.url}. Attempting parse_qs.")
+                    parsed_body_params = parse_qs(ep.body_params)
+                if not isinstance(parsed_body_params, dict):
+                    parsed_body_params = {} # Ensure it's a dict even if parse_qs fails
+
+            parsed_extra_headers = {}
+            if ep.extra_headers:
+                try:
+                    parsed_extra_headers = json.loads(ep.extra_headers)
+                except json.JSONDecodeError:
+                    logger.warning(f"Failed to decode extra_headers JSON for {ep.url}. Defaulting to empty dict.")
+                if not isinstance(parsed_extra_headers, dict):
+                    parsed_extra_headers = {} # Ensure it's a dict
+
             requests_to_process.append({
                 "url": ep.url,
                 "method": ep.method,
-                "body_params": ep.body_params if ep.body_params else {},
-                "extra_headers": ep.extra_headers if ep.extra_headers else {}
+                "body_params": parsed_body_params,
+                "extra_headers": parsed_extra_headers
             })
     
     if not requests_to_process:
@@ -292,20 +386,21 @@ if __name__ == "__main__":
     # Add some dummy endpoints to the database for IDOR testing
     # These would normally come from autorecon.py
     dummy_endpoints_data = [
-        {"url": "[http://test-idor-target.com/api/v1/users/123](http://test-idor-target.com/api/v1/users/123)", "method": "GET", "body_params": {}, "extra_headers": {"Authorization": "Bearer token123"}},
-        {"url": "[http://test-idor-target.com/api/v1/orders?orderId=ABC001](http://test-idor-target.com/api/v1/orders?orderId=ABC001)", "method": "GET", "body_params": {}, "extra_headers": {}},
-        {"url": "[http://test-idor-target.com/profile/edit](http://test-idor-target.com/profile/edit)", "method": "POST", "body_params": {"userId": 12345}, "extra_headers": {"Content-Type": "application/json"}},
-        {"url": "[http://test-idor-target.com/static/image.png](http://test-idor-target.com/static/image.png)", "method": "GET", "body_params": {}, "extra_headers": {}} # Should be filtered out
+        {"url": "[http://test-idor-target.com/api/v1/users/123](http://test-idor-target.com/api/v1/users/123)", "method": "GET", "body_params": "{}", "extra_headers": "{\"Authorization\": \"Bearer token123\"}"},
+        {"url": "[http://test-idor-target.com/api/v1/orders?orderId=ABC001](http://test-idor-target.com/api/v1/orders?orderId=ABC001)", "method": "GET", "body_params": "{}", "extra_headers": "{}"},
+        {"url": "[http://test-idor-target.com/profile/edit](http://test-idor-target.com/profile/edit)", "method": "POST", "body_params": "{\"userId\": 12345}", "extra_headers": "{\"Content-Type\": \"application/json\"}"},
+        {"url": "[http://test-idor-target.com/static/image.png](http://test-idor-target.com/static/image.png)", "method": "GET", "body_params": "{}", "extra_headers": "{}"} # Should be filtered out
     ]
 
     for ep_data in dummy_endpoints_data:
         try:
+            # Ensure body_params and extra_headers are passed as JSON strings for DB storage
             new_endpoint = Endpoint(
                 scan_id=test_scan_id,
                 url=ep_data["url"],
                 method=ep_data["method"],
-                body_params=ep_data["body_params"],
-                extra_headers=ep_data["extra_headers"]
+                body_params=ep_data["body_params"], # Already JSON string
+                extra_headers=ep_data["extra_headers"] # Already JSON string
             )
             test_session.add(new_endpoint)
             test_session.commit()
