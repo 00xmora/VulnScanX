@@ -56,8 +56,9 @@ def run_dalfox_on_url(urls_file_path, url_directory, session=None, scan_id=None)
         print(f"{RED}[!] URLs file not found at {urls_file_path}. Skipping DalFox scan.{NC}")
         return
 
-    # DalFox outputs a JSON file with findings
-    dalfox_output_file = os.path.join(url_directory, "dalfox_results.json")
+    # DalFox output file (no longer directly used as --output, but for logging/reference if needed)
+    # The JSON output will be captured from stdout.
+    dalfox_output_file_name = "dalfox_results.json" # Just a name for reference, not used with --output
     
     # Check if DalFox is installed
     stdout, stderr, returncode = run_command_capture_output("command -v dalfox")
@@ -65,29 +66,33 @@ def run_dalfox_on_url(urls_file_path, url_directory, session=None, scan_id=None)
         print(f"{RED}[!] DalFox is not installed or not in PATH. Please install it to use XSS scanning. Skipping.{NC}")
         return
 
-    # Using -o for JSON output, --skip-bav to potentially speed up if not needed
-    # Using --no-gandi to avoid issues with Gandi API
-    # Using --mass-json-output to get multiple scan results in one JSON
-    dalfox_command = f"dalfox file {urls_file_path} --output {dalfox_output_file} --no-gandi --mass-json-output"
+    # MODIFICATION: Removed --output flag. DalFox will print JSON to stdout with --mass-json-output.
+    dalfox_command = f"dalfox file {urls_file_path} --no-gandi --mass-json-output"
     
     try:
-        process = subprocess.run(dalfox_command, shell=True, capture_output=True, text=True, check=False) # Check false to handle non-zero exit on no findings
+        # Capture stdout directly from the subprocess run
+        process = subprocess.run(dalfox_command, shell=True, capture_output=True, text=True, check=False)
+        dalfox_raw_results = process.stdout
+        
         print(f"{GREEN}[+] DalFox scan completed for URLs in {urls_file_path}{NC}")
 
-        if os.path.exists(dalfox_output_file):
-            with open(dalfox_output_file, 'r') as f:
-                dalfox_raw_results = f.read()
-            
-            dalfox_json_results = []
-            if dalfox_raw_results.strip():
-                # Attempt to split concatenated JSON objects
-                for line in dalfox_raw_results.strip().split('\n'):
-                    try:
-                        dalfox_json_results.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        logger.warning(f"Could not decode line as JSON from DalFox output: {line[:100]}...")
-                        pass # Skip invalid lines
-            
+        dalfox_json_results = []
+        if dalfox_raw_results.strip():
+            # Attempt to split concatenated JSON objects (each line is a separate JSON object)
+            for line in dalfox_raw_results.strip().split('\n'):
+                try:
+                    # DalFox might output non-JSON lines (e.g., banners, progress)
+                    # Filter these out by attempting to load as JSON
+                    json_obj = json.loads(line)
+                    # Further filter to ensure it's a result object (e.g., has 'url' or 'type')
+                    if isinstance(json_obj, dict) and ("url" in json_obj or "type" in json_obj):
+                        dalfox_json_results.append(json_obj)
+                except json.JSONDecodeError:
+                    # This is expected for non-JSON lines from DalFox's stdout
+                    logger.debug(f"Skipping non-JSON line from DalFox output: {line[:100]}...")
+                    pass 
+        
+        if dalfox_json_results:
             # Process and store vulnerabilities in the database
             if session and scan_id is not None:
                 for result_obj in dalfox_json_results:
@@ -118,10 +123,9 @@ def run_dalfox_on_url(urls_file_path, url_directory, session=None, scan_id=None)
             else:
                 print(f"{YELLOW}[!] Session or scan_id not provided. XSS results not stored in database.{NC}")
             
-            os.remove(dalfox_output_file) # Clean up DalFox output file
             print(f"{GREEN}[+] DalFox results processed and stored in database.{NC}")
         else:
-            print(f"{YELLOW}[!] No DalFox output file found at {dalfox_output_file}{NC}")
+            print(f"{YELLOW}[!] DalFox ran, but no JSON results were found in its output (or no vulnerabilities detected).{NC}")
 
     except subprocess.CalledProcessError as e:
         print(f"{RED}Error running DalFox: {e}{NC}")

@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import re
 import os
 import time
@@ -160,7 +161,7 @@ def run_sqlmap(endpoint_data, output_dir, session, scan_id):
             try:
                 new_vulnerability = Vulnerability(
                     scan_id=scan_id,
-                    vulnerability_data=vuln_data,
+                    vulnerability_data=json.dumps(vuln_data), # Store as JSON string
                     vulnerability_type=vuln_data["vulnerability"],
                     severity=vuln_data["severity"],
                     url=vuln_data["url"]
@@ -185,10 +186,16 @@ def run_sqlmap(endpoint_data, output_dir, session, scan_id):
     print(f"{GREEN}[+] SQLMap scan for {url} ({method}) completed.{NC}")
 
 # Main SQL Injection function
-def sql_injection_test(output_dir, headers=None, thread_count=1, delay=1, session=None, scan_id=None):
+def sql_injection_test(output_dir, thread_count=1, delay=1, session=None, scan_id=None):
     """
     Performs SQL Injection testing on endpoints from the database using SQLMap.
     Results are stored in the database.
+    Args:
+        output_dir (str): Directory to store SQLMap output files.
+        thread_count (int): Number of threads for concurrent SQLMap runs.
+        delay (int): Delay in seconds between starting new SQLMap threads.
+        session (sqlalchemy.orm.session.Session): SQLAlchemy session for database operations.
+        scan_id (int): ID of the current scan in ScanHistory.
     """
     print(f"{YELLOW}[+] Starting SQL Injection scan...{NC}")
     
@@ -205,30 +212,32 @@ def sql_injection_test(output_dir, headers=None, thread_count=1, delay=1, sessio
 
     max_workers = int(thread_count) if thread_count and int(thread_count) > 0 else 1
     
-    with threading.Semaphore(max_workers):
-        threads = []
+    # Use ThreadPoolExecutor for concurrent processing, which is generally safer and
+    # more efficient than manually managing threads with Semaphore for this type of task.
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
         for endpoint in endpoints_to_test:
             endpoint_data = {
                 "url": endpoint.url,
                 "method": endpoint.method,
+                # Ensure body_params and extra_headers are parsed from JSON strings
                 "body_params": json.loads(endpoint.body_params) if isinstance(endpoint.body_params, str) and endpoint.body_params else {},
                 "extra_headers": json.loads(endpoint.extra_headers) if isinstance(endpoint.extra_headers, str) and endpoint.extra_headers else {}
             }
-            
-            t = threading.Thread(target=run_sqlmap, args=(endpoint_data, output_dir, session, scan_id))
-            threads.append(t)
-            t.start()
+            # Submit the task to the executor
+            futures.append(executor.submit(run_sqlmap, endpoint_data, output_dir, session, scan_id))
             if delay > 0:
-                time.sleep(delay)
+                time.sleep(delay) # Apply delay between submitting tasks
 
-        for t in threads:
-            t.join()
+        # Wait for all submitted tasks to complete
+        for future in futures:
+            future.result() # This will re-raise any exceptions from the threads
 
     print(f"{GREEN}[+] SQL Injection scan completed. Results stored in database.{NC}")
 
 # This part is for direct testing of the module
 if __name__ == "__main__":
-    from tools.database import init_db, get_session, Base, ScanHistory, Endpoint # For local testing
+    from tools.database import init_db, get_session, ScanHistory, Endpoint # For local testing
 
     temp_db_engine = init_db('sqlite:///test_sqlinjection.db')
     test_session = get_session(temp_db_engine)
@@ -269,7 +278,8 @@ if __name__ == "__main__":
             logger.error(f"Error adding dummy endpoint to DB: {db_e}")
 
     print(f"{BLUE}[+] Running SQL Injection test with sqlmap integration...{NC}")
-    sql_injection_test("dummy_file_path", dummy_output_dir, session=test_session, scan_id=test_scan_id)
+    # Corrected call for local testing:
+    sql_injection_test(output_dir=dummy_output_dir, session=test_session, scan_id=test_scan_id, thread_count=2, delay=0.5)
     
     print(f"{BLUE}[+] Verifying results from database...{NC}")
     retrieved_vulns = test_session.query(Vulnerability).filter_by(scan_id=test_scan_id).all()

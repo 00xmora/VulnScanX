@@ -38,7 +38,7 @@ parser.add_argument("-p", "--port", type=int, default=80, help="Port to run the 
 args = parser.parse_args()
 
 # Global variable for number of threads (can be made configurable via app.config if desired)
-NUM_THREADS = 10 # Default number of threads for concurrent tasks
+NUM_THREADS = 50 # Default number of threads for concurrent tasks
 
 # Dictionary to hold threading.Event objects for each scan_id that needs interactive login
 # This allows the Socket.IO handler to signal the correct scan thread to resume.

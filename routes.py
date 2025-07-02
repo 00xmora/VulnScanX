@@ -1,7 +1,7 @@
 import json
 import threading
 from urllib.parse import urlparse
-from flask import Blueprint, request, jsonify, render_template, Response, stream_with_context, current_app, abort
+from flask import Blueprint, request, jsonify, render_template, Response, stream_with_context, current_app
 from sqlalchemy import func
 from tools.database import ScanHistory
 import markdown

@@ -96,7 +96,8 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
 
         step_name, step_weight = scan_steps[2]
         emit_progress_internal(f'Running {step_name}...', 'info')
-        commandinjection.commandinjection(temp_endpoints_file_path, url_directory, session=current_session, scan_id=scan_id)
+        # Corrected call: commandinjection no longer takes temp_endpoints_file_path as a direct input for URLs
+        commandinjection.commandinjection(output_dir=url_directory, session=current_session, scan_id=scan_id)
         current_weight += step_weight
         
         step_name, step_weight = scan_steps[3]
@@ -286,14 +287,15 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
         if commandinj == "on":
             step_name, step_weight = scan_steps[step_index_offset]
             emit_progress_internal(f'Running {step_name}...', 'info')
-            commandinjection.commandinjection(temp_endpoints_file_path, url_directory, session=current_session, scan_id=scan_id)
+            # Corrected call: commandinjection no longer takes temp_endpoints_file_path as a direct input for URLs
+            commandinjection.commandinjection(output_dir=url_directory, session=current_session, scan_id=scan_id)
             current_weight += step_weight
             step_index_offset += 1
         
         if sqli == "on":
             step_name, step_weight = scan_steps[step_index_offset]
             emit_progress_internal(f'Running {step_name}...', 'info')
-            sqlinjection.sql_injection_test(temp_endpoints_file_path, url_directory, headers, num_threads_global, "1", session=current_session, scan_id=scan_id)
+            sqlinjection.sql_injection_test(url_directory, num_threads_global, "1", session=current_session, scan_id=scan_id)
             current_weight += step_weight
             step_index_offset += 1
             

@@ -98,8 +98,7 @@ def run_command(command, silent=False, output_file=None):
     """
     try:
         if silent and output_file:
-            with open(output_file, 'w') as f:
-                subprocess.run(command, shell=True, check=True, stdout=f, stderr=subprocess.DEVNULL)
+            subprocess.run(command, shell=True, check=True, stdout=open(output_file, 'w'), stderr=subprocess.DEVNULL)
         elif silent:
             subprocess.run(command, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         else:
@@ -138,43 +137,82 @@ def setup_domain_directory(project_path, domain):
     print(f"{BLUE}[+] Directory created: {project_path}/{safe_domain}{NC}")
     return target_path
 
-
-def get_driver(headless=True):
+def get_chrome_version():
     """
-    Initialize a browser driver using webdriver_manager for automatic setup.
-    Tries Chrome first, then Firefox.
+    Detects the installed Google Chrome/Chromium major version.
+    Returns:
+        str: Major version string (e.g., "136") or None if not found.
     """
-    try:
-        chrome_options = ChromeOptions()
-        chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
-        if headless:
-            chrome_options.add_argument("--headless=new")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-        
-        # Use ChromeDriverManager to get the path to the chromedriver executable
-        driver_path = ChromeDriverManager().install()
-        print(f"[DEBUG] Using ChromeDriver from: {driver_path}")
-        service = ChromeService(executable_path=driver_path)
-        return webdriver.Chrome(service=service, options=chrome_options)
-
-    except Exception as e:
-        logger.warning(f"Chrome WebDriver failed: {str(e)}. Falling back to Firefox. Ensure Chrome is installed if you prefer it.")
+    commands = ["google-chrome --version", "chromium --version", "google-chrome-stable --version"]
+    for cmd in commands:
         try:
-            firefox_options = FirefoxOptions()
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
+            if result.returncode == 0:
+                version_match = re.search(r'(\d+)\.\d+\.\d+\.\d+', result.stdout)
+                if version_match:
+                    return version_match.group(1)
+        except Exception as e:
+            logger.debug(f"Command '{cmd}' failed: {e}")
+    return None
+
+def get_selenium_driver(headless=True):
+    """
+    Initializes and returns a Selenium WebDriver (Chrome or Firefox).
+    Prioritizes Chrome, falling back to Firefox if Chrome fails.
+    Automatically downloads matching drivers using webdriver_manager.
+    Args:
+        headless (bool): If True, run browser in headless mode.
+    Returns:
+        selenium.webdriver.remote.webdriver.WebDriver: The initialized WebDriver object.
+    Raises:
+        Exception: If no supported browser WebDriver can be initialized.
+    """
+    driver = None
+    
+    # --- Try Chrome first ---
+    chrome_version = get_chrome_version()
+    if chrome_version:
+        logger.info(f"Detected Chrome/Chromium major version: {chrome_version}")
+        try:
+            chrome_options = ChromeOptions()
+            chrome_options.set_capability("goog:loggingPrefs", {"performance": "ALL"})
             if headless:
-                firefox_options.add_argument("--headless")
+                chrome_options.add_argument("--headless=new")
+                chrome_options.add_argument("--no-sandbox")
+                chrome_options.add_argument("--disable-dev-shm-usage")
             
-            # Use GeckoDriverManager to get the path to the geckodriver executable
-            driver_path = GeckoDriverManager().install()
-            print(f"[DEBUG] Using GeckoDriver from: {driver_path}")
-            service = FirefoxService(executable_path=driver_path)
-            return webdriver.Firefox(service=service, options=firefox_options)
+            # Use ChromeDriverManager to get the path to the chromedriver executable
+            # Specify the version to ensure compatibility
+            driver_path = ChromeDriverManager(version=chrome_version).install()
+            logger.info(f"{GREEN}[+] ChromeDriver installed/found at: {driver_path}{NC}")
+            service = ChromeService(executable_path=driver_path)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            logger.info(f"{GREEN}[+] Chrome WebDriver launched successfully.{NC}")
+            return driver
 
         except Exception as e:
-            logger.error(f"Firefox WebDriver failed: {str(e)}. No browser available. "
-                         f"Please ensure Firefox is installed and/or install 'webdriver_manager' if you haven't already (`pip install webdriver-manager`).")
-            raise Exception("No supported browser WebDriver found.")
+            logger.warning(f"{RED}Chrome WebDriver failed to launch (version {chrome_version}): {str(e)}. Falling back to Firefox. Ensure Chrome is installed and its version is compatible with available ChromeDriver versions.{NC}")
+    else:
+        logger.info(f"{YELLOW}[!] Chrome/Chromium browser not detected. Will attempt to use Firefox.{NC}")
+
+    # --- Fallback to Firefox ---
+    try:
+        firefox_options = FirefoxOptions()
+        if headless:
+            firefox_options.add_argument("--headless")
+        
+        # Use GeckoDriverManager to get the path to the geckodriver executable
+        driver_path = GeckoDriverManager().install()
+        logger.info(f"{GREEN}[+] GeckoDriver installed/found at: {driver_path}{NC}")
+        service = FirefoxService(executable_path=driver_path)
+        driver = webdriver.Firefox(service=service, options=firefox_options)
+        logger.info(f"{GREEN}[+] Firefox WebDriver launched successfully.{NC}")
+        return driver
+
+    except Exception as e:
+        logger.error(f"{RED}Firefox WebDriver failed: {str(e)}. No browser available. "
+                     f"Please ensure Firefox is installed and/or 'webdriver_manager' is installed (`pip install webdriver-manager`).{NC}")
+        raise Exception("No supported browser WebDriver found.")
 
 
 def is_valid_url(url, base_domain):
@@ -363,7 +401,7 @@ def crawl_website(url, headers=None, max_pages=10, headless=True, session=None, 
     if headers is None:
         headers = {}
     
-    driver = get_driver(headless)
+    driver = get_selenium_driver(headless) # Renamed function call
     endpoints_to_store = []
     visited_urls = set()
     urls_to_visit = [url]
@@ -377,13 +415,19 @@ def crawl_website(url, headers=None, max_pages=10, headless=True, session=None, 
     }
     
     try:
-        driver.execute_cdp_cmd("Network.enable", {})
-        driver.execute_cdp_cmd("Network.setExtraHTTPHeaders", {"headers": headers})
+        # Only use execute_cdp_cmd for Chrome-based drivers
+        if isinstance(driver, webdriver.Chrome):
+            driver.execute_cdp_cmd("Network.enable", {})
+            driver.execute_cdp_cmd("Network.setExtraHTTPHeaders", {"headers": headers})
+        else:
+            logger.info(f"{YELLOW}Skipping Network.enable and setExtraHTTPHeaders for non-Chrome driver ({type(driver).__name__}).{NC}")
+            # For Firefox, you might need to set headers differently if critically needed for crawling
+            # e.g., using a proxy or a Firefox profile. For now, we proceed without it.
         
         driver.get(url) # Initial navigation
 
         if interactive_login and not headless:
-            print(f"{YELLOW}🔒 Please log in manually in the opened Chrome window. Waiting for signal to continue...{NC}")
+            print(f"{YELLOW}🔒 Please log in manually in the opened browser window. Waiting for signal to continue...{NC}")
             if login_event: # Check if event is provided
                 login_event.wait() # Wait for the event to be set by the main app
                 print(f"{GREEN}Login signal received. Continuing scan...{NC}")
@@ -449,30 +493,34 @@ def crawl_website(url, headers=None, max_pages=10, headless=True, session=None, 
             except Exception as e:
                 logger.error(f"Error interacting with elements on {current_url}: {str(e)}")
             
-            try:
-                logs = driver.get_log("performance")
-                for entry in logs:
-                    try:
-                        message = json.loads(entry["message"])["message"]
-                        if message["method"] == "Network.requestWillBeSent":
-                            request = message["params"]["request"]
-                            request_url = request["url"]
-                            if is_valid_url(request_url, base_domain):
-                                body_params = extract_parameters(request.get("postData"))
-                                request_headers = {k: v for k, v in request.get("headers", {}).items() if k not in basic_headers}
-                                endpoints_to_store.append({
-                                    "url": request_url,
-                                    "method": request["method"],
-                                    "body_params": body_params,
-                                    "extra_headers": request_headers
-                                })
-                            if request_url.endswith(".js") and is_valid_url(request_url, base_domain):
-                                js_urls.add(request_url)
-                    except (KeyError, json.JSONDecodeError) as e:
-                        logger.warning(f"Error processing log entry: {str(e)}")
-            
-            except Exception as e:
-                logger.error(f"Error capturing network logs: {str(e)}")
+            # Network.get_log is only available for Chrome-based drivers
+            if isinstance(driver, webdriver.Chrome):
+                try:
+                    logs = driver.get_log("performance")
+                    for entry in logs:
+                        try:
+                            message = json.loads(entry["message"])["message"]
+                            if message["method"] == "Network.requestWillBeSent":
+                                request = message["params"]["request"]
+                                request_url = request["url"]
+                                if is_valid_url(request_url, base_domain):
+                                    body_params = extract_parameters(request.get("postData"))
+                                    request_headers = {k: v for k, v in request.get("headers", {}).items() if k not in basic_headers}
+                                    endpoints_to_store.append({
+                                        "url": request_url,
+                                        "method": request["method"],
+                                        "body_params": body_params,
+                                        "extra_headers": request_headers
+                                    })
+                                if request_url.endswith(".js") and is_valid_url(request_url, base_domain):
+                                    js_urls.add(request_url)
+                        except (KeyError, json.JSONDecodeError) as e:
+                            logger.warning(f"Error processing log entry: {str(e)}")
+                
+                except Exception as e:
+                    logger.error(f"Error capturing network logs: {str(e)}")
+            else:
+                logger.info(f"{YELLOW}Skipping network log capture for non-Chrome driver ({type(driver).__name__}).{NC}")
             
             try:
                 links = driver.find_elements(By.CSS_SELECTOR, "a[href], [href]")
@@ -1099,5 +1147,102 @@ def autorecon(url, url_directory=None, headers=None, max_pages=10, threads=4, se
     finally:
         os.chdir(original_cwd)
 
-# Removed the main() function and argparse setup as this script will be imported as a module.
-# The `autorecon` function is now directly callable.
+# This part is for direct testing of the module
+if __name__ == "__main__":
+    # This is for testing purposes only. In production, this is called from VulnScanX.py.
+    from tools.database import init_db, get_session, Base, ScanHistory # For local testing
+    import threading
+
+    # Initialize a temporary database for testing
+    temp_db_engine = init_db('sqlite:///test_autorecon.db')
+    test_session = get_session(temp_db_engine)
+    
+    # Create a dummy ScanHistory record for testing
+    test_domain = "web-security-academy.net" # Example domain
+    test_scan = test_session.query(ScanHistory).filter_by(domain=test_domain).first()
+    if not test_scan:
+        test_scan = ScanHistory(domain=test_domain)
+        test_session.add(test_scan)
+        test_session.commit()
+    test_scan_id = test_scan.id
+
+    dummy_url_directory = "test_autorecon_output"
+    os.makedirs(dummy_url_directory, exist_ok=True)
+
+    # Example: Headers for a logged-in user (optional)
+    test_headers = {"User-Agent": "Mozilla/5.0", "Cookie": "sessionid=test_session_id"}
+
+    # Example of a login event for interactive login simulation
+    test_login_event = threading.Event()
+
+    print(f"{BLUE}[+] Running autorecon test with various options...{NC}")
+    
+    # Example 1: Passive subdomain enumeration and passive URL crawling
+    print(f"\n{CYAN}--- Test Case 1: Passive Subdomain and Passive Crawl ---{NC}")
+    autorecon(
+        url=f"http://{test_domain}",
+        url_directory=os.path.join(dummy_url_directory, "passive_only"),
+        session=test_session,
+        scan_id=test_scan_id,
+        passive_subdomain_enabled=True,
+        passive_crawl_enabled=True,
+        max_pages=5 # Limit for passive crawl
+    )
+
+    # Example 2: Active subdomain enumeration and active URL crawling (headless)
+    print(f"\n{CYAN}--- Test Case 2: Active Subdomain and Active Crawl (Headless) ---{NC}")
+    autorecon(
+        url=f"http://{test_domain}/login", # Start active crawl from a login page
+        url_directory=os.path.join(dummy_url_directory, "active_headless"),
+        headers=test_headers,
+        session=test_session,
+        scan_id=test_scan_id,
+        active_subdomain_enabled=True,
+        active_crawl_enabled=True,
+        open_browser_for_active_crawl=False, # Run headless
+        max_pages=10 # Limit for active crawl
+    )
+
+    # Example 3: Active URL crawling with interactive login (requires browser to open)
+    # This test case will block until the login_event is set (e.g., via a separate signal)
+    # For a real test, you'd need to manually interact with the browser or trigger the event.
+    # print(f"\n{CYAN}--- Test Case 3: Active Crawl with Interactive Login (Manual Intervention Required) ---{NC}")
+    # print(f"{YELLOW}To complete this test, you must manually log in to the browser window that opens and then set the event (e.g., by calling test_login_event.set() in another script/console).{NC}")
+    # autorecon(
+    #     url=f"http://{test_domain}/login",
+    #     url_directory=os.path.join(dummy_url_directory, "active_interactive"),
+    #     headers=test_headers,
+    #     session=test_session,
+    #     scan_id=test_scan_id,
+    #     active_crawl_enabled=True,
+    #     open_browser_for_active_crawl=True, # Open browser for interactive login
+    #     login_event=test_login_event, # Pass the event
+    #     max_pages=5
+    # )
+
+    print(f"\n{BLUE}[+] Verifying autorecon results from database...{NC}")
+    retrieved_subdomains = test_session.query(ReconResult).filter_by(scan_id=test_scan_id, data_type="live_subdomain").all()
+    print(f"   Found {len(retrieved_subdomains)} live subdomains:")
+    for sub in retrieved_subdomains:
+        print(f"     - {sub.value}")
+
+    retrieved_endpoints = test_session.query(Endpoint).filter_by(scan_id=test_scan_id).all()
+    print(f"   Found {len(retrieved_endpoints)} endpoints:")
+    for ep in retrieved_endpoints:
+        print(f"     - {ep.url} ({ep.method})")
+
+    test_session.close()
+    
+    # Clean up test database file
+    if os.path.exists('test_autorecon.db'):
+        os.remove('test_autorecon.db')
+    
+    # Clean up dummy output directory
+    if os.path.exists(dummy_url_directory):
+        try:
+            shutil.rmtree(dummy_url_directory)
+            print(f"{GREEN}[+] Cleaned up directory: {dummy_url_directory}{NC}")
+        except OSError as e:
+            print(f"{RED}Error removing directory {dummy_url_directory}: {e}{NC}")
+
+    print(f"{GREEN}[+] Autorecon test completed.{NC}")
