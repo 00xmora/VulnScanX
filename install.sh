@@ -89,6 +89,7 @@ grep -vE '^(dnsrecon|sublist3r|sqlmap|commix)' requirements.txt > "$TEMP_REQUIRE
 # Install dependencies into the virtual environment
 pip install -r "$TEMP_REQUIREMENTS_FILE" || { echo "Failed to install main Python dependencies into virtual environment. Aborting."; exit 1; }
 rm "$TEMP_REQUIREMENTS_FILE"
+pip install webdriver-manager
 echo "Python dependencies installed into virtual environment."
 
 # Deactivate the virtual environment after installation (optional, but good practice for scripts)
