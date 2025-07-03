@@ -6,7 +6,7 @@ import os
 import logging
 from sqlalchemy.exc import IntegrityError
 from tools.database import Vulnerability, Endpoint # Import Vulnerability and Endpoint models
-from tools.ai_assistant import gemini # Use the consistent ai_assistant integration
+from tools.ai_assistant import gemini ,clean_gemini_response # Use the consistent ai_assistant integration
 from tools.database import try_save_vulnerability
 
 # Define colors for console output
@@ -21,14 +21,6 @@ BOLD = '\033[1m'
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Function to clean Gemini's response (remove markdown wrappers)
-def clean_gemini_response(raw_text):
-    if raw_text.startswith("```json"):
-        raw_text = raw_text[len("```json"):].strip()
-    if raw_text.endswith("```"):
-        raw_text = raw_text[:-3].strip()
-    return raw_text
 
 # Function to send a request (similar to idor.py, for consistency)
 def send_request(req_data):

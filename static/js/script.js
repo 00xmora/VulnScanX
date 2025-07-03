@@ -275,6 +275,17 @@ document.addEventListener("DOMContentLoaded", function() {
                 data["headers"] = {};
             }
 
+            const headers2Input = document.getElementById("headers2").value;
+            if (headers2Input) {
+                try {
+                    data["headers2"] = JSON.parse(headers2Input);
+                } catch (e) {
+                    showModal("Invalid JSON for custom headers2. Please fix it.", 'error');
+                    return;
+                }
+            } else {
+                data["headers"] = {};
+            }
 
             if (data["scan_type"] === "full") {
                 data["passive_crawl"] = true;

@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse, urlencode
 import logging
 import json
 from sqlalchemy.exc import IntegrityError
-from tools.database import Vulnerability, Endpoint # Import the Vulnerability and Endpoint models
+from tools.database import Vulnerability, Endpoint, try_save_vulnerability # Import try_save_vulnerability
 
 # Define colors for console output
 RED = '\033[0;31m'
@@ -74,7 +74,7 @@ def run_sqlmap(endpoint_data, output_dir, session, scan_id):
         # If body_params are present, we construct --data or a --req file.
         # SQLMap can handle JSON or form-urlencoded via --data if Content-Type is set.
         # For complex scenarios or if headers are crucial for the body, --req is better.
-
+        
         # Let's use --data if it's simple form/json or create a --req file otherwise.
         
         # Check if body_params is a dictionary, convert from string if needed
@@ -158,23 +158,11 @@ def run_sqlmap(endpoint_data, output_dir, session, scan_id):
                 "description": f"SQL Injection detected by SQLMap on parameter '{parameter}' using {method} request. Techniques: {technique}. See sqlmap_log.txt for full details."
             }
 
-            try:
-                new_vulnerability = Vulnerability(
-                    scan_id=scan_id,
-                    vulnerability_data=json.dumps(vuln_data), # Store as JSON string
-                    vulnerability_type=vuln_data["vulnerability"],
-                    severity=vuln_data["severity"],
-                    url=vuln_data["url"]
-                )
-                session.add(new_vulnerability)
-                session.commit()
+            # Use the centralized try_save_vulnerability function
+            if try_save_vulnerability(vuln_data, session, scan_id):
                 print(f"{GREEN}   [+] SQL Injection vulnerability stored for: {url} ({method}){NC}")
-            except IntegrityError:
-                session.rollback()
-                logger.info(f"Duplicate SQL Injection vulnerability found and skipped for URL: {url}")
-            except Exception as db_e:
-                session.rollback()
-                logger.error(f"Error saving SQL Injection vulnerability to DB: {db_e}")
+            else:
+                print(f"{YELLOW}   [!] Failed to store SQL Injection vulnerability or it was a duplicate for: {url} ({method}){NC}")
         else:
             print(f"{YELLOW}   [!] No SQL Injection vulnerability detected by SQLMap for: {url} ({method}){NC}")
 

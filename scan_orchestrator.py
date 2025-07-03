@@ -1,7 +1,11 @@
 import json
 import os
-from tools.database import Endpoint
+import time
+import threading # Import threading for the Event object
+from sqlalchemy.orm import sessionmaker
+from tools.database import Endpoint, ScanHistory, Vulnerability # Import necessary models and functions
 from tools import commandinjection, dalfox, sqlinjection, autorecon, idor, csrf, bac # Import all scan tools, including bac
+from tools.ai_assistant import GeminiRateLimitExceeded # Import the custom exception
 
 # These functions will be called by routes.py in separate threads
 # They need access to a Session factory, and the emitter functions from the main app.
@@ -81,7 +85,6 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
         emit_progress_internal(f'{step_name} complete. Retrieving endpoints...', 'info')
 
         # Retrieve endpoints from DB for subsequent scans
-        # Not strictly needed if tools fetch directly from DB, but kept for consistency/file-based tools
         endpoints_urls = [e.url for e in current_session.query(Endpoint).filter_by(scan_id=scan_id).all()]
         
         with open(temp_endpoints_file_path, "w") as f:
@@ -89,37 +92,56 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
                 f.write(ep_url + "\n")
 
         # Phase 2: Run the selected functions
+        # Each tool call should be wrapped in a try-except for GeminiRateLimitExceeded
+        
         step_name, step_weight = scan_steps[1]
         emit_progress_internal(f'Running {step_name}...', 'info')
-        dalfox.run_dalfox_on_url(temp_endpoints_file_path, url_directory, session=current_session, scan_id=scan_id)
+        try:
+            dalfox.run_dalfox_on_url(temp_endpoints_file_path, url_directory, session=current_session, scan_id=scan_id)
+        except GeminiRateLimitExceeded as e:
+            raise e # Re-raise to be caught by the main try-except block
         current_weight += step_weight
 
         step_name, step_weight = scan_steps[2]
         emit_progress_internal(f'Running {step_name}...', 'info')
-        # Corrected call: commandinjection no longer takes temp_endpoints_file_path as a direct input for URLs
-        commandinjection.commandinjection(output_dir=url_directory, session=current_session, scan_id=scan_id)
+        try:
+            commandinjection.commandinjection(output_dir=url_directory, session=current_session, scan_id=scan_id)
+        except GeminiRateLimitExceeded as e:
+            raise e # Re-raise to be caught by the main try-except block
         current_weight += step_weight
         
         step_name, step_weight = scan_steps[3]
         emit_progress_internal(f'Running {step_name}...', 'info')
-        sqlinjection.sql_injection_test(temp_endpoints_file_path, url_directory, headers, num_threads_global, "1", session=current_session, scan_id=scan_id)
+        try:
+            sqlinjection.sql_injection_test(url_directory, num_threads_global, "1", session=current_session, scan_id=scan_id)
+        except GeminiRateLimitExceeded as e:
+            raise e # Re-raise to be caught by the main try-except block
         current_weight += step_weight
         
         step_name, step_weight = scan_steps[4]
         emit_progress_internal(f'Running {step_name}...', 'info')
-        idor.idor(url_directory, session=current_session, scan_id=scan_id, max_workers=num_threads_global)
+        try:
+            idor.idor(url_directory, session=current_session, scan_id=scan_id, max_workers=num_threads_global)
+        except GeminiRateLimitExceeded as e:
+            raise e # Re-raise to be caught by the main try-except block
         current_weight += step_weight
 
         step_name, step_weight = scan_steps[5]
         emit_progress_internal(f'Running {step_name}...', 'info')
-        csrf.csrf(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2) # Pass headers1 and headers2
+        try:
+            csrf.csrf(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2) # Pass headers1 and headers2
+        except GeminiRateLimitExceeded as e:
+            raise e # Re-raise to be caught by the main try-except block
         current_weight += step_weight
 
         step_name, step_weight = scan_steps[6] # New BAC step
         emit_progress_internal(f'Running {step_name}...', 'info')
         # BAC scan requires headers for two users for session comparison
         if headers and headers2:
-            bac.bac_scan(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2, max_workers=num_threads_global)
+            try:
+                bac.bac_scan(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2, max_workers=num_threads_global)
+            except GeminiRateLimitExceeded as e:
+                raise e # Re-raise to be caught by the main try-except block
         else:
             emit_progress_internal(f'Skipping {step_name}: Both headers1 and headers2 are required for Broken Access Control scan.', 'warning')
         current_weight += step_weight
@@ -143,6 +165,20 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
         emit_progress_internal('Scan completed!', 'success')
         sio_instance.emit('scan_complete', {'scan_id': scan_id, 'message': 'Scan finished.', 'progress': 100}, room=sid)
 
+    except GeminiRateLimitExceeded as e:
+        current_session.rollback()
+        error_message = f"Scan halted: Gemini API Rate Limit Exceeded - {e}"
+        print(f"CRITICAL: {error_message}")
+        emit_progress_internal(error_message, 'error') # Use 'error' status for critical issues
+        # Update scan history in DB to Halted
+        scan_record = current_session.query(ScanHistory).filter_by(id=scan_id).first()
+        if scan_record:
+            scan_record.status = "Halted"
+            scan_record.end_time = time.time()
+            scan_record.notes = error_message
+            current_session.add(scan_record)
+            current_session.commit()
+        sio_instance.emit('scan_status_update', {'scan_id': scan_id, 'status': 'Halted', 'message': error_message}, room=sid)
     except Exception as e:
         current_session.rollback()
         error_message = f"Error during scan: {e}"
@@ -280,36 +316,50 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
         if xss == "on":
             step_name, step_weight = scan_steps[step_index_offset]
             emit_progress_internal(f'Running {step_name}...', 'info')
-            dalfox.run_dalfox_on_url(temp_endpoints_file_path, url_directory, session=current_session, scan_id=scan_id)
+            try:
+                dalfox.run_dalfox_on_url(temp_endpoints_file_path, url_directory, session=current_session, scan_id=scan_id)
+            except GeminiRateLimitExceeded as e:
+                raise e # Re-raise to be caught by the main try-except block
             current_weight += step_weight
             step_index_offset += 1
         
         if commandinj == "on":
             step_name, step_weight = scan_steps[step_index_offset]
             emit_progress_internal(f'Running {step_name}...', 'info')
-            # Corrected call: commandinjection no longer takes temp_endpoints_file_path as a direct input for URLs
-            commandinjection.commandinjection(output_dir=url_directory, session=current_session, scan_id=scan_id)
+            try:
+                commandinjection.commandinjection(output_dir=url_directory, session=current_session, scan_id=scan_id)
+            except GeminiRateLimitExceeded as e:
+                raise e # Re-raise to be caught by the main try-except block
             current_weight += step_weight
             step_index_offset += 1
         
         if sqli == "on":
             step_name, step_weight = scan_steps[step_index_offset]
             emit_progress_internal(f'Running {step_name}...', 'info')
-            sqlinjection.sql_injection_test(url_directory, num_threads_global, "1", session=current_session, scan_id=scan_id)
+            try:
+                sqlinjection.sql_injection_test(url_directory, num_threads_global, "1", session=current_session, scan_id=scan_id)
+            except GeminiRateLimitExceeded as e:
+                raise e # Re-raise to be caught by the main try-except block
             current_weight += step_weight
             step_index_offset += 1
             
         if idor_scan == "on":
             step_name, step_weight = scan_steps[step_index_offset]
             emit_progress_internal(f'Running {step_name}...', 'info')
-            idor.idor(url_directory, session=current_session, scan_id=scan_id, max_workers=num_threads_global)
+            try:
+                idor.idor(url_directory, session=current_session, scan_id=scan_id, max_workers=num_threads_global)
+            except GeminiRateLimitExceeded as e:
+                raise e # Re-raise to be caught by the main try-except block
             current_weight += step_weight
             step_index_offset += 1
 
         if csrf_scan == "on":
             step_name, step_weight = scan_steps[step_index_offset]
             emit_progress_internal(f'Running {step_name}...', 'info')
-            csrf.csrf(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2) # Pass headers1 and headers2
+            try:
+                csrf.csrf(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2) # Pass headers1 and headers2
+            except GeminiRateLimitExceeded as e:
+                raise e # Re-raise to be caught by the main try-except block
             current_weight += step_weight
             step_index_offset += 1
 
@@ -317,7 +367,10 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
             step_name, step_weight = scan_steps[step_index_offset]
             emit_progress_internal(f'Running {step_name}...', 'info')
             if headers and headers2:
-                bac.bac_scan(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2, max_workers=num_threads_global)
+                try:
+                    bac.bac_scan(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2, max_workers=num_threads_global)
+                except GeminiRateLimitExceeded as e:
+                    raise e # Re-raise to be caught by the main try-except block
             else:
                 emit_progress_internal(f'Skipping {step_name}: Both headers1 and headers2 are required for Broken Access Control scan.', 'warning')
             current_weight += step_weight
@@ -341,6 +394,20 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
         emit_progress_internal('Custom scan completed!', 'success')
         sio_instance.emit('scan_complete', {'scan_id': scan_id, 'message': 'Custom scan finished.', 'progress': 100}, room=sid)
 
+    except GeminiRateLimitExceeded as e:
+        current_session.rollback()
+        error_message = f"Custom scan halted: Gemini API Rate Limit Exceeded - {e}"
+        print(f"CRITICAL: {error_message}")
+        emit_progress_internal(error_message, 'error') # Use 'error' status for critical issues
+        # Update scan history in DB to Halted
+        scan_record = current_session.query(ScanHistory).filter_by(id=scan_id).first()
+        if scan_record:
+            scan_record.status = "Halted"
+            scan_record.end_time = time.time()
+            scan_record.notes = error_message
+            current_session.add(scan_record)
+            current_session.commit()
+        sio_instance.emit('scan_status_update', {'scan_id': scan_id, 'status': 'Halted', 'message': error_message}, room=sid)
     except Exception as e:
         current_session.rollback()
         error_message = f"Error during custom scan: {e}"

@@ -5,8 +5,8 @@ from urllib.parse import parse_qs, urlparse, urljoin, urlencode
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from sqlalchemy.exc import IntegrityError
-from tools.database import Vulnerability, Endpoint # Import Vulnerability and Endpoint models
-from tools.ai_assistant import gemini # Assuming ai_assistant is available and works as intended
+from tools.database import Vulnerability, Endpoint, try_save_vulnerability # Import Vulnerability, Endpoint models, and try_save_vulnerability
+from tools.ai_assistant import gemini, clean_gemini_response # Import gemini and clean_gemini_response
 import re
 import time # Import time for sleep in retry logic
 
@@ -23,38 +23,10 @@ BOLD = '\033[1m'
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def clean_gemini_response(raw_text):
-    """
-    Removes markdown JSON code block wrappers like ```json ... ```
-    to ensure the string is valid JSON for parsing.
-    """
-    if raw_text.startswith("```json"):
-        raw_text = raw_text[len("```json"):].strip()
-    if raw_text.endswith("```"):
-        raw_text = raw_text[:-3].strip()
-    return raw_text
+# Removed the local clean_gemini_response as it's now imported from tools.ai_assistant
 
-def call_gemini_with_retry(prompt, max_retries=5, initial_delay=1):
-    """
-    Calls the Gemini API with retry logic for rate limit errors.
-    """
-    delay = initial_delay
-    for i in range(max_retries):
-        try:
-            gemini_output = gemini(prompt)
-            # Check if the output itself indicates a rate limit error (e.g., "Error 429")
-            if "Error 429" in gemini_output or "RESOURCE_EXHAUSTED" in gemini_output:
-                logger.warning(f"Gemini API rate limit hit (attempt {i+1}/{max_retries}). Retrying in {delay} seconds...")
-                time.sleep(delay)
-                delay *= 2 # Exponential backoff
-                continue
-            return clean_gemini_response(gemini_output)
-        except Exception as e:
-            logger.error(f"Error calling Gemini API (attempt {i+1}/{max_retries}): {e}")
-            time.sleep(delay)
-            delay *= 2
-    logger.error(f"Failed to get a valid response from Gemini after {max_retries} retries.")
-    return json.dumps({"error": "Gemini API call failed after multiple retries due to quota issues or other errors."})
+# Removed call_gemini_with_retry function as requested.
+# Its logic is now integrated directly into process_single_request.
 
 
 def send_modified_request(req_data):
@@ -158,20 +130,27 @@ def process_single_request(base_request_data, session, scan_id):
         - description (a brief explanation of the test)
         """
 
-        # Send prompt to Gemini with retry logic
-        gemini_output = call_gemini_with_retry(prompt)
-        if "error" in gemini_output: # Check for error message from retry function
-            logger.error(f"Skipping IDOR test for {base_request_data.get('url')} due to Gemini API error: {gemini_output}")
+        gemini_output_requests = None
+        try:
+            gemini_output_requests = gemini(prompt)
+            gemini_output_requests = clean_gemini_response(gemini_output_requests)
+        except Exception as e:
+            logger.error(f"Error calling Gemini API for requests: {e}")
+            logger.error(f"Skipping IDOR test for {base_request_data.get('url')} due to Gemini API error.")
+            return []
+        
+        if "Error 429" in gemini_output_requests or "RESOURCE_EXHAUSTED" in gemini_output_requests:
+            logger.error(f"Gemini API rate limit hit. Skipping IDOR test for {base_request_data.get('url')}.")
             return []
 
         # Parse Gemini's response
         try:
-            test_requests = json.loads(gemini_output)
+            test_requests = json.loads(gemini_output_requests)
             if not isinstance(test_requests, list):
                 raise ValueError("Gemini didn't return a list of requests")
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse Gemini response for request {base_request_data.get('url', 'N/A')}: {str(e)}")
-            logger.error(f"Raw response was: {gemini_output}")
+            logger.error(f"Raw response was: {gemini_output_requests}")
             return []
 
         # Send modified requests and collect responses
@@ -229,10 +208,17 @@ For each response, return a JSON object with:
 
 Return a JSON array of these objects.
 """
-
-        final_analysis = call_gemini_with_retry(analysis_prompt)
-        if "error" in final_analysis: # Check for error message from retry function
-            logger.error(f"Skipping final IDOR analysis for {base_request_data.get('url')} due to Gemini API error: {final_analysis}")
+        final_analysis = None
+        try:
+            final_analysis = gemini(analysis_prompt)
+            final_analysis = clean_gemini_response(final_analysis)
+        except Exception as e:
+            logger.error(f"Error calling Gemini API for analysis: {e}")
+            logger.error(f"Skipping final IDOR analysis for {base_request_data.get('url')}.")
+            return []
+        
+        if "Error 429" in final_analysis or "RESOURCE_EXHAUSTED" in final_analysis:
+            logger.error(f"Gemini API rate limit hit. Skipping final IDOR analysis for {base_request_data.get('url')}.")
             return []
     
         # Parse analysis and store vulnerabilities in the database
@@ -264,23 +250,12 @@ Return a JSON array of these objects.
                         "headers_at_vuln": headers_str # Store as JSON string
                     }
 
-                    try:
-                        new_vulnerability = Vulnerability(
-                            scan_id=scan_id,
-                            vulnerability_data=vuln_data, # This should be a dict, will be stringified by SQLAlchemy
-                            vulnerability_type=vuln_data["vulnerability"],
-                            severity=vuln_data["severity"],
-                            url=vuln_data["url"]
-                        )
-                        session.add(new_vulnerability)
-                        session.commit()
+                    # Use the centralized try_save_vulnerability function
+                    if try_save_vulnerability(vuln_data, session, scan_id):
                         print(f"{GREEN}   [+] IDOR vulnerability stored for: {url} (Parameter: {vulnerable_parameter}, Payload: {payload}){NC}")
-                    except IntegrityError:
-                        session.rollback()
-                        logger.info(f"Duplicate IDOR vulnerability found and skipped for URL: {url}")
-                    except Exception as db_e:
-                        session.rollback()
-                        logger.error(f"Error saving IDOR vulnerability to DB: {db_e}")
+                    else:
+                        print(f"{YELLOW}   [!] Failed to store IDOR vulnerability or it was a duplicate for: {url} (Parameter: {vulnerable_parameter}, Payload: {payload}){NC}")
+
                 else:
                     logger.info(f"   [-] Not vulnerable to IDOR: {v.get('url')} - {v.get('evidence', 'No vulnerability detected.')}")
 
@@ -386,10 +361,10 @@ if __name__ == "__main__":
     # Add some dummy endpoints to the database for IDOR testing
     # These would normally come from autorecon.py
     dummy_endpoints_data = [
-        {"url": "[http://test-idor-target.com/api/v1/users/123](http://test-idor-target.com/api/v1/users/123)", "method": "GET", "body_params": "{}", "extra_headers": "{\"Authorization\": \"Bearer token123\"}"},
-        {"url": "[http://test-idor-target.com/api/v1/orders?orderId=ABC001](http://test-idor-target.com/api/v1/orders?orderId=ABC001)", "method": "GET", "body_params": "{}", "extra_headers": "{}"},
-        {"url": "[http://test-idor-target.com/profile/edit](http://test-idor-target.com/profile/edit)", "method": "POST", "body_params": "{\"userId\": 12345}", "extra_headers": "{\"Content-Type\": \"application/json\"}"},
-        {"url": "[http://test-idor-target.com/static/image.png](http://test-idor-target.com/static/image.png)", "method": "GET", "body_params": "{}", "extra_headers": "{}"} # Should be filtered out
+        {"url": "http://test-idor-target.com/api/v1/users/123", "method": "GET", "body_params": "{}", "extra_headers": "{\"Authorization\": \"Bearer token123\"}"},
+        {"url": "http://test-idor-target.com/api/v1/orders?orderId=ABC001", "method": "GET", "body_params": "{}", "extra_headers": "{}"},
+        {"url": "http://test-idor-target.com/profile/edit", "method": "POST", "body_params": "{\"userId\": 12345}", "extra_headers": "{\"Content-Type\": \"application/json\"}"},
+        {"url": "http://test-idor-target.com/static/image.png", "method": "GET", "body_params": "{}", "extra_headers": "{}"} # Should be filtered out
     ]
 
     for ep_data in dummy_endpoints_data:
