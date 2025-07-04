@@ -292,6 +292,7 @@ document.addEventListener("DOMContentLoaded", function() {
                 data["active_crawl"] = true;
                 data["passive_subdomain"] = true;
                 data["active_subdomain"] = true;
+                data["open_browser"]=true;
 
                 data["crawling"] = "on";
                 data["xss"] = "on";
