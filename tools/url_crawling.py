@@ -1,4 +1,6 @@
 import logging
+import os
+import re
 import requests
 import json
 import time
@@ -259,3 +261,137 @@ def crawl_website(url, headers=None, max_pages=10, headless=True, session=None, 
     
     finally:
         driver.quit()
+
+
+# extract endpoints from js files 
+
+def fetch_js_files(url, headers):
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        js_pattern = re.compile(r'src=["\'](.*?\.js.*?)["\']', re.IGNORECASE)
+        return [urljoin(url, js_file) for js_file in js_pattern.findall(response.text)]
+    except Exception:
+        print(f"Error fetching JS files from {url}")
+        return []
+
+def extract_endpoints(js_url, headers):
+    patterns = [
+        re.compile(r'https?:\/\/(?:[a-zA-Z0-9.-]+)\.[a-zA-Z0-9.-]+(?:\/[a-zA-Z0-9_-]+)*(?:\?[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+(?:&[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+)*)?'),
+        re.compile(r'\/(?:api|v\d+|graphql|gql|rest|wp-json|endpoint|service|data|public|private|internal|external)(?:\/[a-zA-Z0-9_-]+)*(?:\?[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+(?:&[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+)*)?'),
+        re.compile(r'(?<![\/\w])(?:api|v\d+|graphql|gql|rest|wp-json|endpoint|service|data|public|private|internal|external)(?:\/[a-zA-Z0-9_-]+)*(?:\?[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+(?:&[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+)*)?(?![a-zA-Z0-9_-])'),
+        re.compile(r'(["\'])([a-zA-Z][a-zA-Z0-9_-]{2,}\/[a-zA-Z0-9_-]{2,}(?:\/[a-zA-Z0-9_-]+)*(?:\?[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+(?:&[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+)*)?)(\1)'),
+        re.compile(r'(?:"[^"]*"|\'[^\']*\'|)(?<![\w\/])([a-zA-Z][a-zA-Z0-9_-]{1,}\/[a-zA-Z0-9_-]{2,}(?:\/[a-zA-Z0-9_-]+)*(?:\?[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+(?:&[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+)*)?)(?![\w-])'),
+        re.compile(r'(?<!\/)([a-zA-Z][a-zA-Z0-9_-]*\.(?:php|asp|jsp|aspx|cfm|cgi|pl|py|rb|do|action))(?:\?[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+(?:&[a-zA-Z0-9_-]+=[a-zA-Z0-9_-]+)*)?\b', re.IGNORECASE),
+    ]
+    try:
+        response = requests.get(js_url, headers=headers, timeout=10)
+        endpoints = set()
+        for pattern in patterns:
+            matches = pattern.findall(response.text)
+            if pattern.pattern.startswith(r'(["\'])'):
+                endpoints.update(match[1] for match in matches)
+            else:
+                endpoints.update(matches)
+        return endpoints
+    except Exception:
+        print(f"Error extracting endpoints from {js_url}")
+        return set()
+
+def normalize_endpoint(endpoint, base_url):
+    """Normalize an endpoint to a full URL using the base URL of the JS file."""
+    parsed_base = urlparse(base_url)
+    base_domain = f"{parsed_base.scheme}://{parsed_base.netloc}"
+    
+    if endpoint.startswith(('http://', 'https://')):
+        return endpoint  # Already a full URL
+    elif endpoint.startswith('/'):
+        return urljoin(base_domain, endpoint)  # Absolute path, prepend base domain
+    elif '.' in endpoint and not endpoint.startswith('/'):
+        # Likely a subdomain or full domain without protocol (e.g., api.example.com/path)
+        if not endpoint.startswith(('http://', 'https://')):
+            return f"http://{endpoint}"
+        return endpoint
+    else:
+        return urljoin(base_domain, endpoint)  # Relative path, resolve with base URL
+
+def jslinks(domains=None, recursive=True, headers=None, session=None, scan_id=None):
+    import json
+
+    # Default headers
+    default_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+    }
+
+    # Ensure headers is a dict
+    if headers is None:
+        headers = default_headers
+    elif isinstance(headers, str):
+        try:
+            headers = json.loads(headers)
+        except json.JSONDecodeError:
+            headers = default_headers
+    elif not isinstance(headers, dict):
+        headers = default_headers
+
+    # Prepare domains
+    all_domains = []
+    if domains:
+        all_domains.extend(domains if isinstance(domains, list) else [domains])
+
+    urls_to_crawl = []
+    if all_domains:
+        urls_to_crawl.extend([f"http://{d}" if not d.startswith(('http://', 'https://')) else d for d in all_domains])
+
+    if not urls_to_crawl:
+        print("❌ No URLs to crawl. Provide at least one domain")
+        return 
+
+    parsed = urlparse(urls_to_crawl[0])
+    target_domain = parsed.netloc
+    base_url = f"{parsed.scheme}://{target_domain}"
+
+    found_endpoints = set()
+    visited_js = set()
+    queue = urls_to_crawl.copy()
+
+    while queue:
+        url = queue.pop(0)
+        js_files = fetch_js_files(url, headers)
+        for js in js_files:
+            if js not in visited_js:
+                visited_js.add(js)
+                print(f"📜 Found JS file: {js}")
+                endpoints = extract_endpoints(js, headers)
+                for ep in endpoints:
+                    normalized_ep = normalize_endpoint(ep, base_url)
+                    if target_domain in normalized_ep or ep.startswith('/') or ('/' in ep and not ep.startswith(('http://', 'https://'))):
+                        found_endpoints.add(normalized_ep)
+
+                        # ✅ Save to DB if session is provided
+                        if session and scan_id is not None:
+                            try:
+                                new_endpoint = Endpoint(
+                                    scan_id=scan_id,
+                                    url=normalized_ep,
+                                    method="GET",
+                                    body_params=json.dumps({}),
+                                    extra_headers=json.dumps({})
+                                )
+                                session.add(new_endpoint)
+                                session.commit()
+                            except IntegrityError:
+                                session.rollback()
+                                print(f"⚠️ Duplicate endpoint skipped: {normalized_ep}")
+                            except Exception as db_e:
+                                session.rollback()
+                                print(f"❌ Error saving endpoint: {db_e}")
+
+                if recursive:
+                    for endpoint in endpoints:
+                        normalized_recursive = normalize_endpoint(endpoint, base_url)
+                        if endpoint.endswith('.js') and normalized_recursive not in visited_js and normalized_recursive not in queue:
+                            queue.append(normalized_recursive)
+        time.sleep(1)
+
+    print(f"✅ Extracted {len(found_endpoints)} unique endpoints from JS files for {target_domain}")
+    return list(found_endpoints)

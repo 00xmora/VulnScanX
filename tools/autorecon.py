@@ -12,7 +12,7 @@ import threading
 # Import from new modules
 from tools.browser_utils import get_selenium_driver # Only needed for the interactive login prompt if the main app doesn't call crawl_website directly
 from tools.subdomain_enum import get_subdomains_from_free_services, passive_subdomain_enum, filter_live_domains, active_subdomain_enum, set_api_keys
-from tools.url_crawling import passive_url_crawl, crawl_website
+from tools.url_crawling import passive_url_crawl, crawl_website ,jslinks
 from tools.database import init_db, get_session, ScanHistory, ReconResult, Endpoint # Import all necessary DB components
 
 # Define colors (kept for autorecon's own output formatting)
@@ -105,7 +105,7 @@ def setup_domain_directory(project_path, domain):
     return target_path
 
 
-def autorecon(url, url_directory=None, headers=None, max_pages=10, threads=4, session=None, scan_id=None,
+def autorecon(url, url_directory=None, headers=None, max_pages=50, threads=4, session=None, scan_id=None,
               passive_crawl_enabled=False, active_crawl_enabled=False, open_browser_for_active_crawl=False,
               passive_subdomain_enabled=False, active_subdomain_enabled=False, wordlist_path=None,
               login_event=None):
@@ -168,6 +168,7 @@ def autorecon(url, url_directory=None, headers=None, max_pages=10, threads=4, se
         if passive_crawl_enabled:
             print(f"{YELLOW}[+] Running passive URL crawling...{NC}")
             passive_url_crawl(domain, session, scan_id)
+            jslinks(domain, recursive=True, headers=headers, session=session, scan_id=scan_id)
 
         if active_crawl_enabled:
             print(f"{YELLOW}[+] Running active URL crawling with Selenium crawler...{NC}")
