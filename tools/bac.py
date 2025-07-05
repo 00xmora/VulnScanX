@@ -1,8 +1,7 @@
 import json
 import requests
 import os
-from urllib.parse import urlparse, urljoin, urlencode, parse_qs
-from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse, urlencode, parse_qs
 import logging
 import re
 from sqlalchemy.exc import IntegrityError
@@ -263,13 +262,13 @@ def bac_scan(session, scan_id, headers1, headers2, max_workers=4):
         print(f"{YELLOW}[!] No suitable endpoints found for BAC testing after filtering static files.{NC}")
         return []
 
-    # Use ThreadPoolExecutor for concurrent processing of endpoints
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit each endpoint for processing, passing headers for two users
-        futures = [executor.submit(process_single_endpoint_for_bac, ep, session, scan_id, headers1, headers2) for ep in filtered_endpoints]
+    # Process endpoints sequentially (no threading)
+    for ep in filtered_endpoints:
+        try:
+            process_single_endpoint_for_bac(ep, session, scan_id, headers1, headers2)
+        except Exception as e:
+            logger.error(f"Error processing endpoint {ep.url}: {e}")
 
-        for future in futures:
-            future.result() # Calling result() will re-raise any exceptions that occurred in the thread
 
     print(f"{GREEN}[+] Broken Access Control scan completed. Results stored in database.{NC}")
     # Return vulnerabilities found (optional, since they are already saved to DB)

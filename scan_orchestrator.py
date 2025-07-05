@@ -121,7 +121,7 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
         step_name, step_weight = scan_steps[4]
         emit_progress_internal(f'Running {step_name}...', 'info')
         try:
-            idor.idor(url_directory, session=current_session, scan_id=scan_id, max_workers=num_threads_global)
+            idor.idor(url_directory, session=current_session, scan_id=scan_id)
         except GeminiRateLimitExceeded as e:
             raise e # Re-raise to be caught by the main try-except block
         current_weight += step_weight
@@ -139,7 +139,7 @@ def full_scan(url, headers, url_directory, scan_id, sid, db_session_factory, pro
         # BAC scan requires headers for two users for session comparison
         if headers and headers2:
             try:
-                bac.bac_scan(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2, max_workers=num_threads_global)
+                bac.bac_scan(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2)
             except GeminiRateLimitExceeded as e:
                 raise e # Re-raise to be caught by the main try-except block
         else:
@@ -347,7 +347,7 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
             step_name, step_weight = scan_steps[step_index_offset]
             emit_progress_internal(f'Running {step_name}...', 'info')
             try:
-                idor.idor(url_directory, session=current_session, scan_id=scan_id, max_workers=num_threads_global)
+                idor.idor(url_directory, session=current_session, scan_id=scan_id)
             except GeminiRateLimitExceeded as e:
                 raise e # Re-raise to be caught by the main try-except block
             current_weight += step_weight
@@ -368,7 +368,7 @@ def custom_scan(url, headers, crawling, xss, sqli, commandinj, idor_scan, csrf_s
             emit_progress_internal(f'Running {step_name}...', 'info')
             if headers and headers2:
                 try:
-                    bac.bac_scan(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2, max_workers=num_threads_global)
+                    bac.bac_scan(session=current_session, scan_id=scan_id, headers1=headers, headers2=headers2)
                 except GeminiRateLimitExceeded as e:
                     raise e # Re-raise to be caught by the main try-except block
             else:

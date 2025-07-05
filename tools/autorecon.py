@@ -105,7 +105,7 @@ def setup_domain_directory(project_path, domain):
     return target_path
 
 
-def autorecon(url, url_directory=None, headers=None, max_pages=50, threads=4, session=None, scan_id=None,
+def autorecon(url, url_directory=None, headers=None, max_pages=30, threads=4, session=None, scan_id=None,
               passive_crawl_enabled=False, active_crawl_enabled=False, open_browser_for_active_crawl=False,
               passive_subdomain_enabled=False, active_subdomain_enabled=False, wordlist_path=None,
               login_event=None):

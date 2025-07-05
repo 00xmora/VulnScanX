@@ -2,7 +2,6 @@ import json
 import requests
 import os
 from urllib.parse import parse_qs, urlparse, urljoin, urlencode
-from concurrent.futures import ThreadPoolExecutor
 import logging
 from sqlalchemy.exc import IntegrityError
 from tools.database import Vulnerability, Endpoint, try_save_vulnerability # Import Vulnerability, Endpoint models, and try_save_vulnerability
@@ -323,14 +322,12 @@ def idor(url_directory, session, scan_id, max_workers=4):
         print(f"{YELLOW}[!] No suitable endpoints found for IDOR testing after filtering static files.{NC}")
         return []
 
-    # Process requests concurrently
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit each request for processing, passing the session and scan_id
-        futures = [executor.submit(process_single_request, req_data, session, scan_id) for req_data in requests_to_process]
+    for req_data in requests_to_process:
+        try:
+            process_single_request(req_data, session, scan_id)
+        except Exception as e:
+            logger.error(f"Error processing request {req_data['url']}: {e}")
 
-        # Wait for all futures to complete (results are already stored in DB by process_single_request)
-        for future in futures:
-            future.result() # Calling result() will re-raise any exceptions that occurred in the thread
 
     print(f"{GREEN}[+] IDOR scan completed. Results stored in database.{NC}")
     # Return vulnerabilities found (optional, since they are already saved to DB)
